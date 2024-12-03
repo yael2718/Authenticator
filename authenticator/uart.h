@@ -12,4 +12,6 @@ uint8_t UART_getc(void);
 void UART_putc(uint8_t data);
 void UART_handle_command(uint8_t data);
 
+void gen_new_keys(uint32_t app_id);
+
 #endif

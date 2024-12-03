@@ -6,27 +6,21 @@
 #define BUFFER_SIZE 64
 
 // MakeCredentialError messages
-#define STATUS_ERR_BAD_PARAMETER 0x01
-#define STATUS_ERR_APROVAL 0x02
-#define STATUS_ERR_CRYPTO_FAILED 0x03
-#define STATUS_ERR_STORAGE_FULL 0x04
+#define STATUS_ERR_BAD_PARAMETER 0x0A
+#define STATUS_ERR_APROVAL 0x0B
+#define STATUS_ERR_CRYPTO_FAILED 0x0C
+#define STATUS_ERR_STORAGE_FULL 0x0D
 
 struct ring_buffer rx_buffer;   // Buffer de réception global
 uint8_t buffer_data[BUFFER_SIZE]; // Tableau pour les données du buffer
 
-// Initialisation UART
-void UART_init(uint32_t ubrr){
-    /* Définir le débit en bauds */
-    UBRR0H = (unsigned char)(ubrr>>8);
+void UART__init(uint32_t ubrr){
+    /* Set baud rate */
+    UBRR0H = (unsigned char)(ubrr >> 8);
     UBRR0L = (unsigned char)ubrr;
-    /* Activer la réception et la transmission */
-    UCSR0B = (1<<RXEN0)|(1<<TXEN0);
-    // Activer l'interruption "Réception complète du USART" (USART_RXC)
-    UCSR0B |= (1<<RXCIE0);
-
-    // Équivalent à UCSR0C = (1<<UCSZ01) | (1<<UCSZ00) //
-    // On configure UCSZ00 et UCSZ01 à 1 afin d'obtenir des données sur 8 bits.
-    // On ne configure pas UPM0 et UPM1 pour ne pas activer les bits de parité.
+    /* Enable receiver and transmitter */
+    UCSR0B = (1 << RXEN0) | (1 << TXEN0);
+    // Set frame format: 8 data bits, 1 stop bit
     UCSR0C = (3<<UCSZ00);
 
     // Initialisation du ring buffer
@@ -63,15 +57,43 @@ ISR(USART_RX_vect) {
 uint8_t UART_getc(void){
     uint8_t data;
     // Attendre qu'une donnée soit disponible dans le buffer
-    while (!ring_buffer__pop(&rx_buffer, &data));
+    while (ring_buffer__pop(&rx_buffer, &data));
     UART_handle_command(data);
 }
 
 void UART_handle_command(data){
 	if (data == 1){ // Message MakeCredential
+        uint8_t app_id[20]; // Tableau pour stocker l'empreinte
+        uint8_t temp;
+
+        for (int i = 0; i < 20; i++) {
+            if (!ring_buffer__pop(&rx_buffer, &temp)) {
+                // Si un octet manque, envoyer une erreur et réinitialiser le tableau
+                UART_putc(STATUS_ERR_BAD_PARAMETER);
+                memset(app_id, 0, sizeof(app_id)); // Réinitialiser le tableau
+            }
+            app_id[i] = temp; // Stocker l'octet dans le tableau
+        }
+
+        // Appeler la fonction pour générer de nouvelles clés avec app_id
+        gen_new_keys(app_id);
+
 	} else if (data == 2) { // Message GetAssertion
+        uint8_t app_id[20]; // Tableau pour stocker l'empreinte
+        uint8_t client_data[20]; // Tableau pour stocker les données du client
+        uint8_t temp;
+
 	} else { // Message invalide
 	}
+}
+
+void gen_new_keys(uint32_t app_id){
+    // TODO
+    /*
+    - Faire clignoter la led jusqu'a ce que l'utilisateur presse le bouton
+    --> s'il le presse, generer une paire de clés, stocker et envoyer la pk via uart
+    --> si au bout de 10 secondes pas pressé de bouton, envoi message STATUS_ERR_APROVAL
+    */
 }
 
 int main(void){
