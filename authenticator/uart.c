@@ -21,11 +21,11 @@
 #define STATUS_ERR_STORAGE_FULL 0x05
 #define STATUS_ERR_APROVAL 0x06
 
-#define APP_ID_SIZE 20 // 20 bytes for the application ID
+#define SHA1_SIZE 20 // 20 bytes for the application ID
 #define PRIVATE_KEY_SIZE 21 // secp160r1 requires 21 bytes for the private key
 #define PUBLIC_KEY_SIZE 40 // secp160r1 requires 40 bytes for the public key
 #define CREDENTIAL_ID_SIZE 16 // 128 bits for the credential ID
-#define EEPROM_MAX_ENTRIES 13 // 1024 bytes / sizeof(Credential) ~ 13
+#define EEPROM_MAX_ENTRIES 17 // 1024 bytes / 57 ~ 17 (partie entière)
 
 volatile uint8_t bouton_etat = 1;         // État du bouton (1 = relâché, 0 = appuyé)
 volatile uint8_t bouton_compteur = 0;     // Compteur pour détecter la stabilité de l'état
@@ -35,10 +35,11 @@ struct ring_buffer rx_buffer;   // Buffer de réception global
 uint8_t buffer_data[BUFFER_SIZE]; // Tableau pour les données du buffer
 
 Credential EEMEM eeprom_data[EEPROM_MAX_ENTRIES] ; // Stockage des données dans l'EEPROM
+uint8_t EEMEM nb_credentials = 0 ; // Nombre d'entrées dans l'EEPROM
 
 
 typedef struct {
-    uint8_t app_id[APP_ID_SIZE];
+    uint8_t app_id[SHA1_SIZE];
     uint8_t credential_id[CREDENTIAL_ID_SIZE];
     uint8_t private_key[PRIVATE_KEY_SIZE];
 } Credential;
@@ -122,7 +123,6 @@ void UART_putc(uint8_t data) {
 void send_pattern(const char* pattern, uint8_t length) {
     for (uint8_t i = 0; i < length; i++) {
 		UART_putc(pattern[i]);
-        // TODO
     }
 }
 
@@ -144,63 +144,72 @@ void UART_handle_command(uint8_t data){
         UART_handle_make_credential();
 	} else if (data == COMMAND_GET_ASSERTION) { // Message GetAssertion
         UART_handle_get_assertion();
-
-	} else { // Message invalide
-
+	} else if (data == COMMAND_LIST_CREDENTIALS){ // Message ListCredentials
+        UART_handle_list_credentials();
+    } else if (data == COMMAND_RESET){ // Message Reset
+        UART_handle_reset();
+    } else {
+        // Si la commande est inconnue, envoyer une erreur
+        UART_putc(STATUS_ERR_COMMAND_UNKNOWN);
 	}
 }
 
 // --------------------------------- MakeCredential ---------------------------------
 
 void UART_handle_make_credential(void){
-    uint8_t app_id[20]; // Tableau pour stocker l'empreinte
-        uint8_t temp;
+    uint8_t app_id[SHA1_SIZE]; // Tableau pour stocker l'empreinte
+    uint8_t temp;
 
-        for (int i = 0; i < 20; i++) {
-            if (!ring_buffer__pop(&rx_buffer, &temp)) {
-                // Si un octet manque, envoyer une erreur et réinitialiser le tableau
-                UART_putc(STATUS_ERR_BAD_PARAMETER);
-                memset(app_id, 0, sizeof(app_id)); // Réinitialiser le tableau
-            }
-            app_id[i] = temp; // Stocker l'octet dans le tableau
+    for (int i = 0; i < 20; i++) {
+        if (ring_buffer__pop(&rx_buffer, &temp)) {
+            // Si un octet manque, envoyer une erreur et réinitialiser le tableau
+            UART_putc(STATUS_ERR_BAD_PARAMETER);
         }
-        // Appeler la fonction pour générer de nouvelles clés avec app_id
-        gen_new_keys(app_id);
+        app_id[i] = temp; // Stocker l'octet dans le tableau
+    }
+    // Appeler la fonction pour générer de nouvelles clés avec app_id
+    gen_new_keys(app_id);
 }
 
-
 void store_in_eeprom(uint8_t *app_id, uint8_t *credential_id, uint8_t *private_key, uint8_t *public_key) {
-    for (uint8_t i = 0; i < EEPROM_MAX_ENTRIES; i++) {
-        Credential current_entry;
+    Credential current_entry;
+    int i = 0;
+
+    if (eeprom_read_byte(&nb_credentials) == EEPROM_MAX_ENTRIES) {
+        // Si l'EEPROM est pleine, envoyer une erreur
+        UART_putc(STATUS_ERR_STORAGE_FULL);
+        return;
+    }
+
+    while (i < eeprom_read_byte(&nb_credentials)){
         eeprom_read_block(&current_entry, &eeprom_data[i], sizeof(Credential));
 
         // Si l'entrée correspond à app_id ou est vide
-        if (memcmp(current_entry.app_id, app_id, APP_ID_SIZE) == 0 || current_entry.app_id[0] == 0xFF) {
-            // Copier les données dans l'entrée
-            memcpy(current_entry.app_id, app_id, APP_ID_SIZE);
-            memcpy(current_entry.credential_id, credential_id, CREDENTIAL_ID_SIZE);
-            memcpy(current_entry.private_key, private_key, PRIVATE_KEY_SIZE);
-
-            // Écrire les données dans l'EEPROM
-            eeprom_write_block(&current_entry, &eeprom_data[i], sizeof(Credential));
-
-            // Répondre avec succès et envoyer les données
-            UART_putc(STATUS_OK);
-            send_pattern((const char*)credential_id, CREDENTIAL_ID_SIZE); // Envoyer credential_id
-            send_pattern((const char*)public_key, PUBLIC_KEY_SIZE);       // Envoyer public_key
-            return;
+        if (current_entry.app_id == app_id){
+            break;
         }
+        i++;
     }
+    eeprom_read_block(&current_entry, &eeprom_data[i], sizeof(Credential));
+    if (current_entry.app_id != app_id){
+        memcpy(current_entry.app_id, app_id, SHA1_SIZE);
+        // Incrémenter le nombre d'entrées
+        eeprom_update_byte(&nb_credentials, eeprom_read_byte(&nb_credentials) + 1);
+    }
+    memcpy(current_entry.credential_id, credential_id, CREDENTIAL_ID_SIZE);
+    memcpy(current_entry.private_key, private_key, PRIVATE_KEY_SIZE);
+    eeprom_update_block(&current_entry, &eeprom_data[i], sizeof(Credential));
 
-    // Si la mémoire est pleine
-    UART_putc(STATUS_ERR_STORAGE_FULL);
+    // Envoyer un message de confirmation
+    UART_putc(STATUS_OK);
+    send_pattern((const char*)credential_id, CREDENTIAL_ID_SIZE); // Envoyer credential_id
+    send_pattern((const char*)public_key, PUBLIC_KEY_SIZE);       // Envoyer public_key
 }
 
 void gen_new_keys(uint8_t *app_id){
    if (!ask_for_approval()) {
         // Si l'utilisateur ne valide pas dans les 10 secondes, envoyer une erreur
         UART_putc(STATUS_ERR_APPROVAL);
-        memset(app_id, 0, sizeof(app_id)); // Réinitialiser le tableau
         return;
     }
     uint8_t private_key[PRIVATE_KEY_SIZE];
@@ -213,7 +222,6 @@ void gen_new_keys(uint8_t *app_id){
     if (!uECC_make_key(public_key, private_key, curve)) {
         // Si la génération des clés a échoué, envoyer une erreur
         UART_putc(STATUS_ERR_CRYPTO_FAILED);
-        memset(app_id, 0, sizeof(app_id)); // Réinitialiser le tableau
         return;
     }
     // Generate credential_id (16 random bytes)
@@ -226,14 +234,109 @@ void gen_new_keys(uint8_t *app_id){
 
 // --------------------------------- GetAssertion ---------------------------------
 
-void UART_handle_get_assertion(void){
-    //todo
+void sign_data(uint8_t *app_id, uint8_t* client_data){
+    Credential current_entry;
+    int i = 0;
+
+    if (!ask_for_approval()) {
+        // Si l'utilisateur ne valide pas dans les 10 secondes, envoyer une erreur
+        UART_putc(STATUS_ERR_APPROVAL);
+        return;
+    }
+
+    while (i < EEPROM_MAX_ENTRIES){
+        eeprom_read_block(&current_entry, &eeprom_data[i], sizeof(Credential));
+        // Si l'entrée correspond à app_id
+        if (current_entry.app_id == app_id){
+            uECC_Curve curve = uECC_secp160r1();
+            uint8_t signature[40];
+            if (!uECC_sign(current_entry.private_key,
+                    client_data,
+                    SHA1_SIZE,
+                    signature,
+                    curve)){
+                // Si la signature a échoué, envoyer une erreur
+                UART_putc(STATUS_ERR_CRYPTO_FAILED);
+                return;
+            }
+            // Envoyer un message de confirmation
+            UART_putc(STATUS_OK);
+            send_pattern((const char*)current_entry.credential_id, CREDENTIAL_ID_SIZE); // Envoyer credential_id
+            send_pattern((const char*)signature, PUBLIC_KEY_SIZE);       // Envoyer signature
+            return;
+        }
+        i++;
+    }
+    // Si l'entrée n'est pas trouvée, envoyer une erreur
+    UART_putc(STATUS_ERR_NOT_FOUND);
 }
+
+void UART_handle_get_assertion(void){
+    uint8_t app_id[SHA1_SIZE]; // Tableau pour stocker l'empreinte
+    uint8_t client_data[SHA1_SIZE]; // Tableau pour stocker le hachage
+    uint8_t temp;
+
+    for (int i = 0; i < SHA1_SIZE; i++) {
+        if (ring_buffer__pop(&rx_buffer, &temp)) {
+            // Si un octet manque, envoyer une erreur
+            UART_putc(STATUS_ERR_BAD_PARAMETER);
+        }
+        app_id[i] = temp; // Stocker l'octet dans le tableau
+    }
+    for (int i = 0; i < SHA1_SIZE; i++) {
+        if (ring_buffer__pop(&rx_buffer, &temp)) {
+            // Si un octet manque, envoyer une erreur
+            UART_putc(STATUS_ERR_BAD_PARAMETER);
+        }
+        client_data[i] = temp; // Stocker l'octet dans le tableau
+    }
+
+    // Appeler la fonction pour signer les données
+    sign_data(app_id, client_data);
+}
+
+// --------------------------------- ListCredentials ---------------------------------
+
+void UART_handle_list_credentials(void){
+    UART_putc(STATUS_OK);
+    UART_putc(eeprom_read_byte(&nb_credentials));
+    uint8_t i = 0;
+    Credential current_entry;
+    while (i < nb_credentials){
+        eeprom_read_block(&current_entry, &eeprom_data[i], sizeof(Credential));
+        send_pattern((const char*)current_entry.credential_id, CREDENTIAL_ID_SIZE); // Envoyer credential_id
+        send_pattern((const char*)current_entry.app_id, SHA1_SIZE); // Envoyer app_id
+        i++;
+    }
+}
+
+// --------------------------------- Reset ---------------------------------
+
+void UART_handle_reset(void){
+    if (!ask_for_approval()) {
+        // Si l'utilisateur ne valide pas dans les 10 secondes, envoyer une erreur
+        UART_putc(STATUS_ERR_APPROVAL);
+        return;
+    }
+    int mem_len = eeprom_read_byte(&nb_credentials) * sizeof(Credential);
+    for (int i = 0; i < mem_len; i++){
+        eeprom_write_byte(&eeprom_data[i], 0);
+    }
+    eeprom_write_byte(&nb_credentials, 0);
+    // Envoyer un message de confirmation
+    UART_putc(STATUS_OK);
+}
+
 
 
 int main(void){
 
     uECC_set_rng(RNG_Function);
+    config();
+    UART__init(MYUBRR);
 
+    while(1){
+        UART_getc();
+    }
 	return 0;
 }

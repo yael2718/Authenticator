@@ -1,5 +1,5 @@
 ifeq ($(MAC), 1)
-    PORT := /dev/tty.usbmodem2101
+    PORT := /dev/tty.usbmodem101
 else
     PORT := /dev/ttyACM0
 endif
