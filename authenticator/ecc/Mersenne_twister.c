@@ -111,7 +111,7 @@ int RNG_Function(uint8_t *dest, unsigned size){
         return 0;
     }
     unsigned long r = genrand_int32();
-    for(int i = 0; i < size; i += 4){
+    for(unsigned int i = 0; i < size; i += 4){
         dest[i] = r>>24;
         dest[i + 1] = (r>>16) & 0xff;
         dest[i + 2] = (r>>8) & 0xff;

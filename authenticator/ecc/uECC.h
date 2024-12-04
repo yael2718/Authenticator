@@ -360,17 +360,13 @@ int uECC_verify(const uint8_t *public_key,
                 const uint8_t *signature,
                 uECC_Curve curve);
 
-#ifdef __cplusplus
-} /* end of extern "C" */
-#endif
-
-//------------------------------------------------------------------------------
-// Mersenne_twister.c
-//------------------------------------------------------------------------------
 
 void init_genrand(unsigned long s);
 unsigned long genrand_int32(void);
 int RNG_Function(uint8_t *dest, unsigned size);
 
+#ifdef __cplusplus
+} /* end of extern "C" */
+#endif
 
 #endif /* _UECC_H_ */

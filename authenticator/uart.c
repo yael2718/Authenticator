@@ -34,24 +34,24 @@ volatile uint8_t pressed_button = 0;
 struct ring_buffer rx_buffer;   // Buffer de réception global
 uint8_t buffer_data[BUFFER_SIZE]; // Tableau pour les données du buffer
 
-Credential EEMEM eeprom_data[EEPROM_MAX_ENTRIES] ; // Stockage des données dans l'EEPROM
-uint8_t EEMEM nb_credentials = 0 ; // Nombre d'entrées dans l'EEPROM
-
-
 typedef struct {
     uint8_t app_id[SHA1_SIZE];
     uint8_t credential_id[CREDENTIAL_ID_SIZE];
     uint8_t private_key[PRIVATE_KEY_SIZE];
 } Credential;
 
-void config(){
+Credential EEMEM eeprom_data[EEPROM_MAX_ENTRIES] ; // Stockage des données dans l'EEPROM
+uint8_t EEMEM nb_credentials = 0 ; // Nombre d'entrées dans l'EEPROM
+
+
+void config(void){
     // Initialisation des broches
     DDRD |= (1 << LED_PIN);    // Configurer PD4 comme sortie pour la led
     DDRD &= ~(1 << BUTTON_PIN);   // Configurer PD2 comme entrée pour le bouton
     PORTD |= (1 << BUTTON_PIN);   // Activer la résistance pull-up interne pour le bouton
 }
 
-int ask_for_approval() {
+int ask_for_approval(void) {
     for(int i = 0; i < 10; i++){
         PORTD ^= (1 << LED_PIN);     //  allumer la led pendant 0.5 seconde
         for(int j = 0; j < 33 ; j++){   //  j va jusqu'à 33 car 500/15 = 33
@@ -76,7 +76,7 @@ int ask_for_approval() {
     return 0; 
 }
 
-void debounce() {
+void debounce(void) {
     uint8_t current_state = PIND & (1 << BUTTON_PIN); // Lire l'état actuel du bouton (PD2)
 
     if (current_state != bouton_etat) {       // Si l'état a changé
@@ -93,7 +93,7 @@ void debounce() {
     }
 }
 
-void UART__init(uint32_t ubrr){
+void UART_init(uint32_t ubrr){
     /* Set baud rate */
     UBRR0H = (unsigned char)(ubrr >> 8);
     UBRR0L = (unsigned char)ubrr;
@@ -132,7 +132,7 @@ ISR(USART_RX_vect) {
     ring_buffer__push(&rx_buffer, data);  // Stocker dans le buffer
 }
 
-uint8_t UART_getc(void){
+void UART_getc(void){
     uint8_t data;
     // Attendre qu'une donnée soit disponible dans le buffer
     while (ring_buffer__pop(&rx_buffer, &data));
@@ -209,7 +209,7 @@ void store_in_eeprom(uint8_t *app_id, uint8_t *credential_id, uint8_t *private_k
 void gen_new_keys(uint8_t *app_id){
    if (!ask_for_approval()) {
         // Si l'utilisateur ne valide pas dans les 10 secondes, envoyer une erreur
-        UART_putc(STATUS_ERR_APPROVAL);
+        UART_putc(STATUS_ERR_APROVAL);
         return;
     }
     uint8_t private_key[PRIVATE_KEY_SIZE];
@@ -240,7 +240,7 @@ void sign_data(uint8_t *app_id, uint8_t* client_data){
 
     if (!ask_for_approval()) {
         // Si l'utilisateur ne valide pas dans les 10 secondes, envoyer une erreur
-        UART_putc(STATUS_ERR_APPROVAL);
+        UART_putc(STATUS_ERR_APROVAL);
         return;
     }
 
@@ -315,12 +315,12 @@ void UART_handle_list_credentials(void){
 void UART_handle_reset(void){
     if (!ask_for_approval()) {
         // Si l'utilisateur ne valide pas dans les 10 secondes, envoyer une erreur
-        UART_putc(STATUS_ERR_APPROVAL);
+        UART_putc(STATUS_ERR_APROVAL);
         return;
     }
     int mem_len = eeprom_read_byte(&nb_credentials) * sizeof(Credential);
     for (int i = 0; i < mem_len; i++){
-        eeprom_write_byte(&eeprom_data[i], 0);
+        eeprom_write_byte(&((uint8_t*)eeprom_data)[i], 0);
     }
     eeprom_write_byte(&nb_credentials, 0);
     // Envoyer un message de confirmation
@@ -333,7 +333,7 @@ int main(void){
 
     uECC_set_rng(RNG_Function);
     config();
-    UART__init(MYUBRR);
+    UART_init(MYUBRR);
 
     while(1){
         UART_getc();
