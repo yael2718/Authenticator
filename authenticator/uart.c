@@ -4,8 +4,8 @@
 #define BUTTON_PIN PD2 
 
 #define FOSC 1843200 // Clock Speed
-#define BAUD 9600 // Baud rate
-#define MYUBRR FOSC/16/BAUD-1
+#define F_CPU 16000000UL
+#define BAUD 115200 // Baud rate
 #define BUFFER_SIZE 64
 
 // MakeCredentialError messages
@@ -93,10 +93,13 @@ void debounce(void) {
     }
 }
 
-void UART_init(uint32_t ubrr){
+void UART_init(void){
+
+    #include <util/setbaud.h>
+
     /* Set baud rate */
-    UBRR0H = (unsigned char)(ubrr >> 8);
-    UBRR0L = (unsigned char)ubrr;
+    UBRR0H = (unsigned char)(UBRR_VALUE >> 8);
+    UBRR0L = (unsigned char)UBRR_VALUE;
     /* Enable receiver and transmitter */
     UCSR0B = (1 << RXEN0) | (1 << TXEN0);
     // Set frame format: 8 data bits, 1 stop bit
@@ -333,7 +336,7 @@ int main(void){
 
     uECC_set_rng(RNG_Function);
     config();
-    UART_init(MYUBRR);
+    UART_init();
 
     while(1){
         UART_getc();

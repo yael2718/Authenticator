@@ -1,6 +1,6 @@
 # Détection du port selon le système d'exploitation
 ifeq ($(MAC), 1)
-    PORT := /dev/tty.usbmodem101
+    PORT := /dev/tty.usbmodem1101
 else
     PORT := /dev/ttyACM0
 endif

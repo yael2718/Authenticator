@@ -12,7 +12,7 @@
 #include <string.h>
 
 void config(void);
-void UART_init(uint32_t ubrr);
+void UART_init(void);
 void UART_getc(void);
 void UART_putc(uint8_t data);
 void UART_handle_command(uint8_t data);
