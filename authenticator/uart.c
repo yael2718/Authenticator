@@ -21,8 +21,11 @@
 #define STATUS_ERR_STORAGE_FULL 0x05
 #define STATUS_ERR_APROVAL 0x06
 
+#define APP_ID_SIZE 20 // 20 bytes for the application ID
 #define PRIVATE_KEY_SIZE 21 // secp160r1 requires 21 bytes for the private key
 #define PUBLIC_KEY_SIZE 40 // secp160r1 requires 40 bytes for the public key
+#define CREDENTIAL_ID_SIZE 16 // 128 bits for the credential ID
+#define EEPROM_MAX_ENTRIES 13 // 1024 bytes / sizeof(Credential) ~ 13
 
 volatile uint8_t bouton_etat = 1;         // État du bouton (1 = relâché, 0 = appuyé)
 volatile uint8_t bouton_compteur = 0;     // Compteur pour détecter la stabilité de l'état
@@ -31,6 +34,15 @@ volatile uint8_t pressed_button = 0;
 struct ring_buffer rx_buffer;   // Buffer de réception global
 uint8_t buffer_data[BUFFER_SIZE]; // Tableau pour les données du buffer
 
+Credential EEMEM eeprom_data[EEPROM_MAX_ENTRIES] ; // Stockage des données dans l'EEPROM
+
+
+typedef struct {
+    uint8_t app_id[APP_ID_SIZE];
+    uint8_t credential_id[CREDENTIAL_ID_SIZE];
+    uint8_t private_key[PRIVATE_KEY_SIZE];
+} Credential;
+
 void config(){
     // Initialisation des broches
     DDRD |= (1 << LED_PIN);    // Configurer PD4 comme sortie pour la led
@@ -38,7 +50,7 @@ void config(){
     PORTD |= (1 << BUTTON_PIN);   // Activer la résistance pull-up interne pour le bouton
 }
 
-void ask_for_approval() {
+int ask_for_approval() {
     for(int i = 0; i < 10; i++){
         PORTD ^= (1 << LED_PIN);     //  allumer la led pendant 0.5 seconde
         for(int j = 0; j < 33 ; j++){   //  j va jusqu'à 33 car 500/15 = 33
@@ -127,20 +139,20 @@ uint8_t UART_getc(void){
     UART_handle_command(data);
 }
 
-void UART_handle_command(data){
+void UART_handle_command(uint8_t data){
 	if (data == COMMAND_MAKE_CREDENTIAL){ // Message MakeCredential
         UART_handle_make_credential();
 	} else if (data == COMMAND_GET_ASSERTION) { // Message GetAssertion
-        uint8_t app_id[20]; // Tableau pour stocker l'empreinte
-        uint8_t client_data[20]; // Tableau pour stocker les données du client
-        uint8_t temp;
+        UART_handle_get_assertion();
 
 	} else { // Message invalide
 
 	}
 }
 
-void UART_handle_make_credential(){
+// --------------------------------- MakeCredential ---------------------------------
+
+void UART_handle_make_credential(void){
     uint8_t app_id[20]; // Tableau pour stocker l'empreinte
         uint8_t temp;
 
@@ -156,7 +168,35 @@ void UART_handle_make_credential(){
         gen_new_keys(app_id);
 }
 
-void gen_new_keys(uint32_t app_id){
+
+void store_in_eeprom(uint8_t *app_id, uint8_t *credential_id, uint8_t *private_key, uint8_t *public_key) {
+    for (uint8_t i = 0; i < EEPROM_MAX_ENTRIES; i++) {
+        Credential current_entry;
+        eeprom_read_block(&current_entry, &eeprom_data[i], sizeof(Credential));
+
+        // Si l'entrée correspond à app_id ou est vide
+        if (memcmp(current_entry.app_id, app_id, APP_ID_SIZE) == 0 || current_entry.app_id[0] == 0xFF) {
+            // Copier les données dans l'entrée
+            memcpy(current_entry.app_id, app_id, APP_ID_SIZE);
+            memcpy(current_entry.credential_id, credential_id, CREDENTIAL_ID_SIZE);
+            memcpy(current_entry.private_key, private_key, PRIVATE_KEY_SIZE);
+
+            // Écrire les données dans l'EEPROM
+            eeprom_write_block(&current_entry, &eeprom_data[i], sizeof(Credential));
+
+            // Répondre avec succès et envoyer les données
+            UART_putc(STATUS_OK);
+            send_pattern((const char*)credential_id, CREDENTIAL_ID_SIZE); // Envoyer credential_id
+            send_pattern((const char*)public_key, PUBLIC_KEY_SIZE);       // Envoyer public_key
+            return;
+        }
+    }
+
+    // Si la mémoire est pleine
+    UART_putc(STATUS_ERR_STORAGE_FULL);
+}
+
+void gen_new_keys(uint8_t *app_id){
    if (!ask_for_approval()) {
         // Si l'utilisateur ne valide pas dans les 10 secondes, envoyer une erreur
         UART_putc(STATUS_ERR_APPROVAL);
@@ -165,6 +205,7 @@ void gen_new_keys(uint32_t app_id){
     }
     uint8_t private_key[PRIVATE_KEY_SIZE];
     uint8_t public_key[PUBLIC_KEY_SIZE];
+    uint8_t credential_id[CREDENTIAL_ID_SIZE];
 
     // Select the curve secp160r1
     uECC_Curve curve = uECC_secp160r1();
@@ -175,27 +216,24 @@ void gen_new_keys(uint32_t app_id){
         memset(app_id, 0, sizeof(app_id)); // Réinitialiser le tableau
         return;
     }
+    // Generate credential_id (16 random bytes)
+    uECC_RNG_Function rng_function = uECC_get_rng();
+    rng_function(credential_id, CREDENTIAL_ID_SIZE);
 
-    /*
-    L’Authenticator génère également un identifiant unique associé à cette paire, appelé
-    credential_id, de longueur 128 bits. Cet identifiant ne doit pas être lié au nombre de paires de
-    clés stockées par l’Authenticator.
-    L’Authenticator sauvegarde de façon non volatile l’association entre l’empreinte de app_id,
-    credential_id et la clé privée générée.
-    Si la mémoire non volatile est saturée et qu’il n’est pas possible d’ajouter la nouvelle entrée,
-    l’Authenticator envoie un message MakeCredentialError avec le code
-    STATUS_ERR_STORAGE_FULL.
-    Si une entrée existe déjà pour l’empreinte de app_id, ses valeurs doivent être remplacées par la
-    nouvelle entrée.
-    Si aucune erreur ne s’est produite, l’Authenticator envoie un message MakeCredentialResponse
-    contenant :
-    • credential_id (16 octets)
-    • la clé publique générée (40 octets)
-    */
-
-
+    // Stocker les clés dans l'EEPROM
+    store_in_eeprom(app_id, credential_id, private_key, public_key);
 }
 
+// --------------------------------- GetAssertion ---------------------------------
+
+void UART_handle_get_assertion(void){
+    //todo
+}
+
+
 int main(void){
+
+    uECC_set_rng(RNG_Function);
+
 	return 0;
 }

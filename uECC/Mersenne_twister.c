@@ -41,6 +41,8 @@
    email: m-mat @ math.sci.hiroshima-u.ac.jp (remove space)
 */
 
+#include "uECC.h"
+
 /* Period parameters */  
 #define N 624
 #define M 397

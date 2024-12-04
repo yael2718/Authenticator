@@ -364,4 +364,13 @@ int uECC_verify(const uint8_t *public_key,
 } /* end of extern "C" */
 #endif
 
+//------------------------------------------------------------------------------
+// Mersenne_twister.c
+//------------------------------------------------------------------------------
+
+void init_genrand(unsigned long s);
+unsigned long genrand_int32(void);
+int RNG_Function(uint8_t *dest, unsigned size);
+
+
 #endif /* _UECC_H_ */
