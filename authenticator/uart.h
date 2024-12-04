@@ -5,7 +5,7 @@
 #include <avr/interrupt.h>
 #include <avr/eeprom.h>
 #include "ring_buffer.h"
-#include "../uECC/uECC.h"
+#include "uECC/uECC.h"
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
