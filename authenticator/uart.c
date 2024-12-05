@@ -6,20 +6,20 @@
 #define FOSC 1843200 // Clock Speed
 #define F_CPU 16000000UL
 #define BAUD 115200 // Baud rate
-#define BUFFER_SIZE 64
+#define USE_2X 1
 
 // MakeCredentialError messages
-#define COMMAND_LIST_CREDENTIALS 0x00
-#define COMMAND_MAKE_CREDENTIAL 0x01
-#define COMMAND_GET_ASSERTION 0x02
-#define COMMAND_RESET 0x03
-#define STATUS_OK 0x00
-#define STATUS_ERR_COMMAND_UNKNOWN 0x01
-#define STATUS_ERR_CRYPTO_FAILED 0x02
-#define STATUS_ERR_BAD_PARAMETER 0x03
-#define STATUS_ERR_NOT_FOUND 0x04
-#define STATUS_ERR_STORAGE_FULL 0x05
-#define STATUS_ERR_APROVAL 0x06
+#define COMMAND_LIST_CREDENTIALS 0
+#define COMMAND_MAKE_CREDENTIAL 1
+#define COMMAND_GET_ASSERTION 2
+#define COMMAND_RESET 3
+#define STATUS_OK 0
+#define STATUS_ERR_COMMAND_UNKNOWN 1
+#define STATUS_ERR_CRYPTO_FAILED 2
+#define STATUS_ERR_BAD_PARAMETER 3
+#define STATUS_ERR_NOT_FOUND 4
+#define STATUS_ERR_STORAGE_FULL 5
+#define STATUS_ERR_APROVAL 6
 
 #define SHA1_SIZE 20 // 20 bytes for the application ID
 #define PRIVATE_KEY_SIZE 21 // secp160r1 requires 21 bytes for the private key
@@ -30,9 +30,6 @@
 volatile uint8_t bouton_etat = 1;         // État du bouton (1 = relâché, 0 = appuyé)
 volatile uint8_t bouton_compteur = 0;     // Compteur pour détecter la stabilité de l'état
 volatile uint8_t pressed_button = 0;  
-
-struct ring_buffer rx_buffer;   // Buffer de réception global
-uint8_t buffer_data[BUFFER_SIZE]; // Tableau pour les données du buffer
 
 typedef struct {
     uint8_t app_id[SHA1_SIZE];
@@ -93,23 +90,20 @@ void debounce(void) {
     }
 }
 
-void UART_init(void){
-
+void UART_init() {
+    // Calcul de UBRR
     #include <util/setbaud.h>
 
-    /* Set baud rate */
-    UBRR0H = (unsigned char)(UBRR_VALUE >> 8);
-    UBRR0L = (unsigned char)UBRR_VALUE;
-    /* Enable receiver and transmitter */
-    UCSR0B = (1 << RXEN0) | (1 << TXEN0);
-    // Set frame format: 8 data bits, 1 stop bit
-    UCSR0C = (3<<UCSZ00);
+    UBRR0H = UBRRH_VALUE;
+    UBRR0L = UBRRL_VALUE;
+    #if USE_2X
+    UCSR0A |= (1 << U2X0); // Double vitesse
+    #else
+    UCSR0A &= ~(1 << U2X0); // Mode normal
+    #endif
 
-    // Initialisation du ring buffer
-    ring_buffer__init(&rx_buffer, buffer_data, BUFFER_SIZE);
-    
-    // Activer globalement les interruptions
-    sei();
+    UCSR0B = (1 << RXEN0) | (1 << TXEN0);   // Activation de la réception et de la transmission
+    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00); // Format de trame : 8 bits de données, 1 bit de stop
 }
 
 // Envoi d'un caractère via UART
@@ -129,20 +123,15 @@ void send_pattern(const char* pattern, uint8_t length) {
     }
 }
 
-// Interruption pour la réception UART
-ISR(USART_RX_vect) {
-    uint8_t data = UDR0;             // Lire la donnée reçue
-    ring_buffer__push(&rx_buffer, data);  // Stocker dans le buffer
-}
-
-void UART_getc(void){
+uint8_t UART_getc(void){
     uint8_t data;
-    // Attendre qu'une donnée soit disponible dans le buffer
-    while (ring_buffer__pop(&rx_buffer, &data));
-    UART_handle_command(data);
+    while (!(UCSR0A & (1 << RXC0)));    // Attente jusqu'à réception d'un caractère
+    data = UDR0;
+    return data;                     // Retourne le caractère reçu
 }
 
 void UART_handle_command(uint8_t data){
+
 	if (data == COMMAND_MAKE_CREDENTIAL){ // Message MakeCredential
         UART_handle_make_credential();
 	} else if (data == COMMAND_GET_ASSERTION) { // Message GetAssertion
@@ -164,11 +153,7 @@ void UART_handle_make_credential(void){
     uint8_t temp;
 
     for (int i = 0; i < 20; i++) {
-        if (ring_buffer__pop(&rx_buffer, &temp)) {
-            // Si un octet manque, envoyer une erreur et réinitialiser le tableau
-            UART_putc(STATUS_ERR_BAD_PARAMETER);
-        }
-        app_id[i] = temp; // Stocker l'octet dans le tableau
+        app_id[i] = UART_getc(); // Stocker l'octet dans le tableau
     }
     // Appeler la fonction pour générer de nouvelles clés avec app_id
     gen_new_keys(app_id);
@@ -280,18 +265,10 @@ void UART_handle_get_assertion(void){
     uint8_t temp;
 
     for (int i = 0; i < SHA1_SIZE; i++) {
-        if (ring_buffer__pop(&rx_buffer, &temp)) {
-            // Si un octet manque, envoyer une erreur
-            UART_putc(STATUS_ERR_BAD_PARAMETER);
-        }
-        app_id[i] = temp; // Stocker l'octet dans le tableau
+        app_id[i] = UART_getc(); // Stocker l'octet dans le tableau
     }
     for (int i = 0; i < SHA1_SIZE; i++) {
-        if (ring_buffer__pop(&rx_buffer, &temp)) {
-            // Si un octet manque, envoyer une erreur
-            UART_putc(STATUS_ERR_BAD_PARAMETER);
-        }
-        client_data[i] = temp; // Stocker l'octet dans le tableau
+        client_data[i] = UART_getc(); // Stocker l'octet dans le tableau
     }
 
     // Appeler la fonction pour signer les données
@@ -339,7 +316,8 @@ int main(void){
     UART_init();
 
     while(1){
-        UART_getc();
+        uint8_t command = UART_getc();
+        UART_handle_command(command);
     }
 	return 0;
 }
