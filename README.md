@@ -2,8 +2,8 @@
 
 ## Compilation et téléversement
 
-Make upload
-Si sur MAC, modifier dans le Makefile la ligne 3 pour y renseigner le bon port, et faire 
+Make upload\
+Si sur MAC, modifier dans le Makefile la ligne 3 pour y renseigner le bon port, et faire\
 Make upload MAC=1
 
 ## Fonctionnalités implémentées
@@ -19,11 +19,6 @@ Make upload MAC=1
 Nous avons décidé d'utiliser la branche static de la librairie micro-ecc car elle répondait à nos besoin et qu'elle permettait de faire plus de pré calcul à la compilatio, et donc de réduire le temps de calcul à l'exécution.
 
 ### eeprom
-typedef struct {
-    uint8_t app_id[SHA1_SIZE];
-    uint8_t credential_id[CREDENTIAL_ID_SIZE];
-    uint8_t private_key[PRIVATE_KEY_SIZE];
-} Credential;
 On stocke un utilisateur dans l'eeprom grâce à la structure Credential, qui comporte 3 champs : 
 - **app_id** : l'app id sur 20 octets (taille d'un hash de sha1).
 - **credential_id** : le credential id sur 17 octets.
@@ -33,9 +28,9 @@ On stocke un utilisateur dans l'eeprom grâce à la structure Credential, qui co
 ## Difficultés rencontrées
 
 ### Génération de nombres aléatoires
-Nous avons commencé par vouloir utiliser le Mersenne Twister (http://www.math.sci.hiroshima-u.ac.jp/m-mat/MT/MT2002/emt19937ar.html), un générateur de nombre pseudo aléatoire pas cryptographique, mais apportant un niveau de sécurité suffisant (en comparaison de la courbe secp160r1), et surtout très performant.
+Nous avons commencé par vouloir utiliser le Mersenne Twister (http://www.math.sci.hiroshima-u.ac.jp/m-mat/MT/MT2002/emt19937ar.html), un générateur de nombre pseudo aléatoire pas cryptographique, mais apportant un niveau de sécurité suffisant (en comparaison de la courbe secp160r1), et surtout très performant.\
 Cependant la présence du fichier faisait bugger la fonction make_key de uECC, on a donc du faire sans.
-Nous avons donc utilisé la fonction rand() de stdlib, que nous avons initialisé avec une seed générée à partir de l'ADC.
+Nous avons donc utilisé la fonction rand() de stdlib, que nous avons initialisé avec une seed générée à partir de l'ADC.\
 On a réalisé plusieurs essais, et c'était en mettant le prescaler à 128 (ADPS2,1,0 = 1) qu'on avait des valeurs les plus éloignées les unes des autres.
 
 ### BaudRate
@@ -49,7 +44,7 @@ Nous avons commencé par utiliser la librairie ring_buffer pour communiquer en u
 
 ## Tests réalisés
 
-register nom
-login nom
-logout
+register nom\
+login nom\
+logout\
 //A redire
