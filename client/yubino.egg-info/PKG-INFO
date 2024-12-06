@@ -1,7 +1,0 @@
-Metadata-Version: 2.1
-Name: yubino
-Version: 0.0.2
-Author-email: Vincent Ruello <vincent.ruello@u-paris.fr>
-Requires-Dist: pyserial
-Requires-Dist: requests
-Requires-Dist: ecdsa
