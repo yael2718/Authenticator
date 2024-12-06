@@ -27,8 +27,8 @@
 #define CREDENTIAL_ID_SIZE 16 // 128 bits for the credential ID
 #define EEPROM_MAX_ENTRIES 17 // 1024 bytes / 57 ~ 17 (partie entière)
 
-volatile uint8_t bouton_etat = 1;         // État du bouton (1 = relâché, 0 = appuyé)
-volatile uint8_t bouton_compteur = 0;     // Compteur pour détecter la stabilité de l'état
+volatile uint8_t state_button = 1;         // État du bouton (1 = relâché, 0 = appuyé)
+volatile uint8_t count_button = 0;     // Compteur pour détecter la stabilité de l'état
 volatile uint8_t pressed_button = 0;  
 
 typedef struct {
@@ -40,13 +40,69 @@ typedef struct {
 Credential EEMEM eeprom_data[EEPROM_MAX_ENTRIES] ; // Stockage des données dans l'EEPROM
 uint8_t EEMEM nb_credentials = 0 ; // Nombre d'entrées dans l'EEPROM
 
-
+/**
+ * @brief Configure le générateur pseudo-aléatoire, initialise les broches de la LED et du bouton, et configure l'UART.
+ * 
+ * @param Aucun.
+ * @return Aucun.
+ */
 void config(void){
+
+    // Initialisation de la seed pour le générateur pseudo-aléatoire
+    srand(init_seed());
+    uECC_set_rng(avr_rng);
+
     // Initialisation des broches
     DDRD |= (1 << LED_PIN);    // Configurer PD4 comme sortie pour la led
     DDRD &= ~(1 << BUTTON_PIN);   // Configurer PD2 comme entrée pour le bouton
     PORTD |= (1 << BUTTON_PIN);   // Activer la résistance pull-up interne pour le bouton
+
+    // Initialisation de l'UART
+    UART_init();
 }
+
+//--------------------------------- Random ---------------------------------
+uint16_t read_adc() {
+    // Configuration de l'ADC :
+    ADMUX = (1 << REFS0);  // Référence AVcc.
+    ADCSRA = (1 << ADEN) | (1 << ADSC) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+    //(1<<ADEN) pour activer l'ADC. (1<<ADSC) pour activer la conversion. (1<<ADPS0:2) set le division factor à 128 pour avoir une fréquence de 125kHz.
+
+    // Attendre la fin de la conversion : le bit ADSC est set à 0 à la fin de la conversion.
+    while (ADCSRA & (1 << ADSC));
+
+    return ADC;
+}
+
+/**
+ * @brief Initialise le générateur pseudo-aléatoire avec une graine obtenue à partir de l'ADC.
+ * 
+ * @param Aucun.
+ * @return int : La graine générée.
+ */
+int init_seed() {
+    uint32_t seed = 0;
+    for (int i = 0; i < 4; i++) {
+        seed ^= (read_adc() & 0xFF) << (i<<3);  // Combine les 8 bits significatifs
+    }
+    return seed;
+}
+
+/**
+ * @brief Génère un nombre pseudo-aléatoire pour un nombre spécifié d'octets.
+ * 
+ * @param dest Pointeur où les octets aléatoires seront stockés.
+ * @param size Nombre d'octets à générer.
+ * @return int : 1 pour le succès.
+ */
+int avr_rng(uint8_t *dest, unsigned size) {
+    for (unsigned i = 0; i < size; i++) {
+        dest[i] = (uint8_t)(rand() & 0xFF); // Générer un octet pseudo-aléatoire
+    }
+    return 1; // Succès
+}
+
+// --------------------------------- Button methods ---------------------------------
 
 int ask_for_approval(void) {
     for(int i = 0; i < 10; i++){
@@ -76,20 +132,28 @@ int ask_for_approval(void) {
 void debounce(void) {
     uint8_t current_state = PIND & (1 << BUTTON_PIN); // Lire l'état actuel du bouton (PD2)
 
-    if (current_state != bouton_etat) {       // Si l'état a changé
-        bouton_compteur++;                             // Incrémenter le compteur
-        if (bouton_compteur >= 4) {                    // Si l'état est stable pendant 4 cycles
-            bouton_etat = current_state;      // Mettre à jour l'état du bouton
-            if (bouton_etat == 0) {           // Si le bouton est stable à l'état bas
+    if (current_state != state_button) {       // Si l'état a changé
+        count_button++;                             // Incrémenter le compteur
+        if (count_button >= 4) {                    // Si l'état est stable pendant 4 cycles
+            state_button = current_state;      // Mettre à jour l'état du bouton
+            if (state_button == 0) {           // Si le bouton est stable à l'état bas
                 pressed_button = 1;             // Signaler un appui validé
             }
-            bouton_compteur = 0;                       // Réinitialiser le compteur
+            count_button = 0;                       // Réinitialiser le compteur
         }
     } else {
-        bouton_compteur = 0;                           // Si l'état est constant, réinitialiser
+        count_button = 0;                           // Si l'état est constant, réinitialiser
     }
 }
 
+// --------------------------------- UART methods ---------------------------------
+
+/**
+ * @brief Initialise l'UART avec les paramètres spécifiés dans les macros BAUD et F_CPU.
+ * 
+ * @param Aucun.
+ * @return Aucun.
+ */
 void UART_init() {
     // Calcul de UBRR
     #include <util/setbaud.h>
@@ -106,7 +170,12 @@ void UART_init() {
     UCSR0C = (1 << UCSZ01) | (1 << UCSZ00); // Format de trame : 8 bits de données, 1 bit de stop
 }
 
-// Envoi d'un caractère via UART
+/**
+ * @brief Envoie un octet via l'UART.
+ * 
+ * @param data L'octet à envoyer.
+ * @return Aucun.
+ */
 void UART_putc(uint8_t data) {
     // Boucle jusqu'à ce que le registre UDR0 soit prêt pour une nouvelle donnée
     while (!(UCSR0A & (1 << UDRE0))) {
@@ -116,13 +185,25 @@ void UART_putc(uint8_t data) {
     UDR0 = data;
 }
 
-// Envoi du motif via UART
+/**
+ * @brief Envoie une séquence de données (motif) via l'UART.
+ * 
+ * @param pattern Pointeur vers les données à envoyer.
+ * @param length Nombre d'octets à envoyer.
+ * @return Aucun.
+ */
 void send_pattern(const char* pattern, uint8_t length) {
     for (uint8_t i = 0; i < length; i++) {
 		UART_putc(pattern[i]);
     }
 }
 
+/**
+ * @brief Reçoit un octet via l'UART.
+ * 
+ * @param Aucun.
+ * @return uint8_t - L'octet reçu.
+ */
 uint8_t UART_getc(void){
     uint8_t data;
     while (!(UCSR0A & (1 << RXC0)));    // Attente jusqu'à réception d'un caractère
@@ -130,6 +211,12 @@ uint8_t UART_getc(void){
     return data;                     // Retourne le caractère reçu
 }
 
+/**
+ * @brief Traite une commande reçue via l'UART.
+ * 
+ * @param data Commande reçue (un octet).
+ * @return Aucun.
+ */
 void UART_handle_command(uint8_t data){
 
 	if (data == COMMAND_MAKE_CREDENTIAL){ // Message MakeCredential
@@ -148,16 +235,15 @@ void UART_handle_command(uint8_t data){
 
 // --------------------------------- MakeCredential ---------------------------------
 
-void UART_handle_make_credential(void){
-    uint8_t app_id[SHA1_SIZE]; // Tableau pour stocker l'empreinte
-
-    for (int i = 0; i < SHA1_SIZE; i++) {
-        app_id[i] = UART_getc(); // Stocker l'octet dans le tableau
-    }
-    // Appeler la fonction pour générer de nouvelles clés avec app_id
-    gen_new_keys(app_id);
-}
-
+/**
+ * @brief Stocke les informations dans l'EEPROM, incluant app_id, credential_id, private_key, et public_key.
+ * 
+ * @param app_id Pointeur vers l'empreinte de l'application (SHA1).
+ * @param credential_id Pointeur vers le credential_id (16 octets).
+ * @param private_key Pointeur vers la clé privée.
+ * @param public_key Pointeur vers la clé publique.
+ * @return Aucun.
+ */
 void store_in_eeprom(uint8_t *app_id, uint8_t *credential_id, uint8_t *private_key, uint8_t *public_key) {
     Credential current_entry;
     int i = 0;
@@ -173,7 +259,7 @@ void store_in_eeprom(uint8_t *app_id, uint8_t *credential_id, uint8_t *private_k
     while (i < nb){
         eeprom_read_block(&current_entry, &eeprom_data[i], sizeof(Credential));
         // Si l'entrée correspond à app_id ou est vide
-        if (current_entry.app_id == app_id){
+        if (memcmp(current_entry.app_id, app_id, SHA1_SIZE) == 0) {
             app_id_found = 1;
             break;
         }
@@ -196,13 +282,12 @@ void store_in_eeprom(uint8_t *app_id, uint8_t *credential_id, uint8_t *private_k
     send_pattern((const char*)public_key, PUBLIC_KEY_SIZE);       // Envoyer public_key
 }
 
-int avr_rng(uint8_t *dest, unsigned size) {
-    for (unsigned i = 0; i < size; i++) {
-        dest[i] = rand() % 256; // Générer un octet pseudo-aléatoire
-    }
-    return 1; // Succès
-}
-
+/**
+ * @brief Génère une paire de clés (privée/publique) et un credential_id, puis les stocke dans l'EEPROM.
+ * 
+ * @param app_id Pointeur vers l'empreinte de l'application (SHA1).
+ * @return Aucun.
+ */
 void gen_new_keys(uint8_t *app_id){
    if (!ask_for_approval()) {
         // Si l'utilisateur ne valide pas dans les 10 secondes, envoyer une erreur
@@ -227,8 +312,32 @@ void gen_new_keys(uint8_t *app_id){
     store_in_eeprom(app_id, credential_id, private_key, public_key);
 }
 
+/**
+ * @brief Gère la commande MakeCredential pour générer une nouvelle clé.
+ *        Lit les données de l'UART et appelle la fonction `gen_new_keys`.
+ * 
+ * @param Aucun.
+ * @return Aucun.
+ */
+void UART_handle_make_credential(void){
+    uint8_t app_id[SHA1_SIZE]; // Tableau pour stocker l'empreinte
+
+    for (int i = 0; i < SHA1_SIZE; i++) {
+        app_id[i] = UART_getc(); // Stocker l'octet dans le tableau
+    }
+    // Appeler la fonction pour générer de nouvelles clés avec app_id
+    gen_new_keys(app_id);
+}
+
 // --------------------------------- GetAssertion ---------------------------------
 
+/**
+ * @brief Signe les données client_data en utilisant la clé privée correspondant à app_id.
+ * 
+ * @param app_id Pointeur vers l'empreinte de l'application (SHA1).
+ * @param client_data Pointeur vers les données client à signer (SHA1).
+ * @return Aucun.
+ */
 void sign_data(uint8_t *app_id, uint8_t* client_data){
     Credential current_entry;
     int i = 0;
@@ -242,7 +351,7 @@ void sign_data(uint8_t *app_id, uint8_t* client_data){
     while (i < EEPROM_MAX_ENTRIES){
         eeprom_read_block(&current_entry, &eeprom_data[i], sizeof(Credential));
         // Si l'entrée correspond à app_id
-        if (current_entry.app_id == app_id){
+        if (memcmp(current_entry.app_id, app_id, SHA1_SIZE) == 0){
             uint8_t signature[40];
             if (!uECC_sign(current_entry.private_key,
                     client_data,
@@ -263,6 +372,13 @@ void sign_data(uint8_t *app_id, uint8_t* client_data){
     UART_putc(STATUS_ERR_NOT_FOUND);
 }
 
+/**
+ * @brief Gère la commande GetAssertion pour signer des données client.
+ *        Lit app_id et client_data via l'UART, puis appelle la fonction `sign_data`.
+ * 
+ * @param Aucun.
+ * @return Aucun.
+ */
 void UART_handle_get_assertion(void){
     uint8_t app_id[SHA1_SIZE]; // Tableau pour stocker l'empreinte
     uint8_t client_data[SHA1_SIZE]; // Tableau pour stocker le hachage
@@ -280,6 +396,13 @@ void UART_handle_get_assertion(void){
 
 // --------------------------------- ListCredentials ---------------------------------
 
+/**
+ * @brief Liste les credentials stockés dans l'EEPROM, incluant app_id et credential_id.
+ *        Envoie les informations via l'UART.
+ * 
+ * @param Aucun.
+ * @return Aucun.
+ */
 void UART_handle_list_credentials(void){
     UART_putc(STATUS_OK);
     UART_putc(eeprom_read_byte(&nb_credentials));
@@ -295,30 +418,41 @@ void UART_handle_list_credentials(void){
 
 // --------------------------------- Reset ---------------------------------
 
+/**
+ * @brief Réinitialise l'EEPROM en supprimant tous les credentials et réinitialise le compteur nb_credentials.
+ * 
+ * @param Aucun.
+ * @return Aucun.
+ */
 void UART_handle_reset(void) {
     if (!ask_for_approval()) {
         UART_putc(STATUS_ERR_APROVAL);
         return;
     }
+    uint8_t nb = eeprom_read_byte(&nb_credentials);
+    Credential empty_entry = {0};
 
-    size_t eeprom_size = EEPROM_MAX_ENTRIES * sizeof(Credential);
+    // Réinitialiser chaque entrée
+    for (uint8_t i = 0; i < nb; i++) {
+        eeprom_write_block(&empty_entry, &eeprom_data[i], sizeof(Credential));
+    }
 
-    uint8_t zero_buffer[eeprom_size];
-    memset(zero_buffer, 0, eeprom_size);
-
-    eeprom_write_block(zero_buffer, eeprom_data, eeprom_size);
-
+    // Réinitialiser le compteur
     eeprom_write_byte(&nb_credentials, 0);
 
     UART_putc(STATUS_OK);
 }
 
+// --------------------------------- Main ---------------------------------
+
+/**
+ * @brief Fonction principale qui configure les périphériques et exécute une boucle infinie pour traiter les commandes.
+ * 
+ * @param Aucun.
+ * @return int : Code de sortie (0 si tout se passe bien).
+ */
 int main(void){
-
-    uECC_set_rng(avr_rng);
     config();
-    UART_init();
-
     while(1){
         uint8_t command = UART_getc();
         UART_handle_command(command);

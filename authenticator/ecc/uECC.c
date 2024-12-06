@@ -2012,6 +2012,8 @@ static void vli_bytesToNative(uint64_t *native, const uint8_t *bytes) {
 
 #endif /* uECC_WORD_SIZE */
 
+#include "../uart.h"
+
 int uECC_make_key(uint8_t public_key[uECC_BYTES*2], uint8_t private_key[uECC_BYTES]) {
     uECC_word_t private[uECC_WORDS];
     EccPoint public;

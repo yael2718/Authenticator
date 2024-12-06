@@ -6,10 +6,7 @@ else
 endif
 
 # Options du compilateur
-WARNINGS := -Wall -Wextra -pedantic -Wshadow -Wpointer-arith -Wcast-align \
-            -Wwrite-strings \
-            -Wnested-externs -Winline -Wno-long-long \
-            -Wstrict-prototypes -Wno-array-bounds
+WARNINGS := -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function
 
 CFLAGS := -Os -DF_CPU=16000000UL -mmcu=atmega328p $(WARNINGS)
 

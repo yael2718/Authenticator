@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 void config(void);
 void UART_init(void);
@@ -27,5 +28,7 @@ void sign_data(uint8_t *app_id, uint8_t* client_data);
 void send_pattern(const char* pattern, uint8_t length);
 void store_in_eeprom(uint8_t *app_id, uint8_t *credential_id, uint8_t *private_key, uint8_t *public_key);
 
-int avr_rng(uint8_t *dest, unsigned size);
+uint16_t read_adc();
+int init_seed();
+
 #endif

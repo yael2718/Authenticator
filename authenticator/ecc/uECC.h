@@ -294,10 +294,6 @@ Returns the value of uECC_CURVE. Helpful for foreign-interfaces to higher-level 
 */
 int uECC_curve(void);
 
-void init_genrand(unsigned long s);
-unsigned long genrand_int32(void);
-int RNG_Function(uint8_t *dest, unsigned size);
-
 #ifdef __cplusplus
 } /* end of extern "C" */
 #endif
