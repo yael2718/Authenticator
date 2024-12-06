@@ -107,9 +107,6 @@ unsigned long genrand_int32(void)
 }
 
 int RNG_Function(uint8_t *dest, unsigned size){
-    if(dest == (void*)0 || size == 0){
-        return 0;
-    }
     unsigned long r = genrand_int32();
     for(unsigned int i = 0; i < size; i += 4){
         dest[i] = r>>24;
