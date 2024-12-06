@@ -2,9 +2,16 @@
 
 ## Introduction
 
-Le projet **Authenticator** est un système embarqué conçu pour gérer des credentials sécurisés via une interface UART et un stockage en EEPROM. Il offre des fonctionnalités telles que la génération de clés cryptographiques, le stockage persistant des données et la gestion des credentials.
+L'**Authenticator** est un système embarqué conçu pour gérer des credentials sécurisés via une interface UART et un stockage en EEPROM. Il permet à
+l’utilisateur de s’authentifier auprès d’un ensemble de services (appelés Relying Parties) à travers
+un Client (souvent un navigateur web).
 
 ---
+
+## Schéma électrique
+
+![Image Description](Schema_electronique.png)
+
 
 ## Compilation et téléversement
 
