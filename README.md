@@ -1,50 +1,107 @@
 # Projet Authenticator
 
+## Introduction
+
+Le projet **Authenticator** est un système embarqué conçu pour gérer des credentials sécurisés via une interface UART et un stockage en EEPROM. Il offre des fonctionnalités telles que la génération de clés cryptographiques, le stockage persistant des données et la gestion des credentials.
+
+---
+
 ## Compilation et téléversement
 
-Make upload\
-Si sur MAC, modifier dans le Makefile la ligne 3 pour y renseigner le bon port, et faire\
-Make upload MAC=1
+### Étapes pour compiler et téléverser le programme :
+1. **Compilation :**
+   - Pour compiler le projet, utilisez la commande suivante :
+     ```bash
+     make
+     ```
+2. **Téléversement :**
+   - Si vous êtes sur Linux/Windows :
+     ```bash
+     make upload
+     ```
+   - Si vous êtes sur Mac :
+     Modifiez la ligne 3 du `Makefile` pour y indiquer le port correct (par exemple `/dev/tty.usbmodemXXXX`), puis exécutez :
+     ```bash
+     make upload MAC=1
+     ```
+
+---
 
 ## Fonctionnalités implémentées
 
-- **Génération de clés** : Utilisation de la bibliothèque `uECC` pour la génération de paires de clés publiques/privées.
-- **Stockage en EEPROM** : Les credentials et les clés sont stockés dans la mémoire EEPROM pour assurer la persistance des données entre les redémarrages du système.
-- **Authentification via UART** : Commandes permettant de créer de nouveaux credentials, de récupérer des assertions et de lister les credentials stockés.
-- **Reset de l'EEPROM** : Effacement de toutes les données stockées après validation par l'utilisateur.
+- **Génération de clés** :
+  - Utilisation de la bibliothèque `uECC` pour générer des paires de clés publiques et privées basées sur la courbe elliptique `secp160r1`.
+  
+- **Stockage en EEPROM** :
+  - Les credentials et les clés sont stockés de manière persistante dans la mémoire EEPROM sous la structure `Credential`.
+
+- **Authentification via UART** :
+  - Gestion des commandes UART pour créer de nouveaux credentials, récupérer des assertions, et lister les credentials stockés.
+
+- **Réinitialisation** :
+  - Fonction de réinitialisation permettant d'effacer toutes les données stockées dans l'EEPROM après une validation utilisateur.
+
+---
 
 ## Choix techniques
 
-### micro-ecc
-Nous avons décidé d'utiliser la branche static de la librairie micro-ecc car elle répondait à nos besoin et qu'elle permettait de faire plus de pré calcul à la compilatio, et donc de réduire le temps de calcul à l'exécution.
+### 1. **Utilisation de `micro-ecc`**
+Nous avons opté pour la branche **static** de la bibliothèque `micro-ecc` car elle permet une optimisation des calculs cryptographiques grâce à des pré-calculs réalisés à la compilation. Cela réduit considérablement le temps d'exécution sur des microcontrôleurs à ressources limitées.
 
-### eeprom
-On stocke un utilisateur dans l'eeprom grâce à la structure Credential, qui comporte 3 champs : 
-- **app_id** : l'app id sur 20 octets (taille d'un hash de sha1).
-- **credential_id** : le credential id sur 17 octets.
-- **private_key** : la clé privée sur 21 octets.
+### 2. **Gestion de l'EEPROM**
 
+Les données des utilisateurs sont stockées dans l'EEPROM à l'aide d'une structure appelée `Credential`, qui contient :
+
+- **`app_id`** : Identifiant unique de l'application (20 octets, SHA-1 hash).
+- **`credential_id`** : Identifiant du credential (16 octets).
+- **`private_key`** : Clé privée utilisée pour signer les données (21 octets).
+
+#### Capacité mémoire
+
+Dans le cadre de l'Atmega328p Rev3, l'EEPROM a une taille de 1 Ko, soit 1024 octets disponibles. Pour optimiser l'espace et permettre des recherches efficaces, nous avons décidé de stocker :
+
+- Les triplets `app_id`, `credential_id`, et `private_key` (57 octets par entrée).
+- Un compteur représentant le nombre de triplets actuellement en mémoire.
+
+#### Calcul de la capacité maximale
+
+Le nombre maximal de clés pouvant être stockées est donné par la formule :  
+**Capacité maximale = 1024 / 57 ≈ 17.96**  
+
+Nous retenons uniquement la partie entière pour éviter tout dépassement de mémoire, soit un maximum de **17 clés**.
+
+### 3. **Génération de nombres pseudo-aléatoires**
+Nous avons opté pour la fonction standard `rand` de `stdlib`, initialisée avec une **seed** dérivée des valeurs de l'ADC.
+
+### 4. **Gestion du BaudRate**
+Plutôt que de calculer manuellement le registre UBRR pour la configuration du baud rate, nous avons utilisé la bibliothèque `util/setbaud.h`, qui ajuste automatiquement les valeurs en fonction de la fréquence d'horloge et du baud rate désiré.
+
+---
 
 ## Difficultés rencontrées
 
-### Génération de nombres aléatoires
-Nous avons commencé par vouloir utiliser le Mersenne Twister (http://www.math.sci.hiroshima-u.ac.jp/m-mat/MT/MT2002/emt19937ar.html), un générateur de nombre pseudo aléatoire pas cryptographique, mais apportant un niveau de sécurité suffisant (en comparaison de la courbe secp160r1), et surtout très performant.\
-Cependant la présence du fichier faisait bugger la fonction make_key de uECC, on a donc du faire sans.
-Nous avons donc utilisé la fonction rand() de stdlib, que nous avons initialisé avec une seed générée à partir de l'ADC.\
-On a réalisé plusieurs essais, et c'était en mettant le prescaler à 128 (ADPS2,1,0 = 1) qu'on avait des valeurs les plus éloignées les unes des autres.
+### 1. **Génération de nombres aléatoires**
+Nous avons initialement tenté d'utiliser le Mersenne Twister, un générateur pseudo-aléatoire performant et suffisant pour la sécurité de la courbe `secp160r1`. Cependant, son intégration causait des conflits avec la fonction uECC_make_key de la bibliothèque uECC (nous n'avons pas pu trouver la source de l'erreur).
+Nous avons donc opté pour `rand()` de stdlib.h, initialisé avec une seed obtenue via l'ADC (convertisseur analogique-numérique). En configurant le prescaler à 128, nous avons amélioré l'entropie des valeurs générées, garantissant une qualité adaptée à notre application.
 
-### BaudRate
-En utilisant la même méthode qu'au TP précèdent pour set le baudRate, on avait des bugs car il était trop élevé. Nous avons donc utilisé la librairie util/setbaud.h .
+### 2. **BaudRate instable**
+En utilisant la même formule que dans les travaux pratiques précédents, les valeurs lues/ecrites avec l'UART étaient incohérentes. Ce problème a été corrigé avec l'utilisation du fichier `util/setbaud.h` pour configurer le baud rate du périphérique UART.
 
-### APP_ID
-Le client envoie toujours la même app_id, donc on ne peut pas teset plusieurs applications à la fois.//A redire
+### 3. **Gestion des app_id**
+Cette partie ne traite pas une difficulté, mais plutôt un manque de complétude des tests. Les tests étaient limités par le fait que le client utilisait une app_id fixe, ce qui empêchait de tester plusieurs applications en parallèle, et donc de tester un peu plus en profondeur la gestion de notre mémoire non volatile.
 
-### ring_buffer
-Nous avons commencé par utiliser la librairie ring_buffer pour communiquer en uart. Mais nous n'arrivions pas à la fiare marcher, puis finalement nous nous sommes rendus compte qu'il n'y en avait pas besoin car l'utilisateur n'envoie pas beaucoup de commandes dans un intervalle court.
+### 4. **Utilisation initiale de `ring_buffer`**
+Au départ, nous avons tenté d’utiliser la bibliothèque `ring_buffer` fournie, mais nous rencontrions des difficultés à la faire fonctionner correctement. En approfondissant, nous avons constaté que les octets étaient transmis assez lentement par le client. Cela permettait de traiter les données sans avoir besoin d’un mécanisme de gestion de buffer. Nous avons donc décidé de nous en passer.
+
+---
 
 ## Tests réalisés
 
-register nom\
-login nom\
-logout\
-//A redire
+### 1. **Tests fonctionnels**
+- **Commande MakeCredential** : Test de la génération de clés avec différents app_id.
+- **Commande GetAssertion** : Vérification de la signature des données client avec les clés correspondantes.
+- **Commande ListCredentials** : Vérification de l'extraction des credentials stockés dans l'EEPROM.
+- **Commande Reset** : Test de la réinitialisation complète de l'EEPROM.
+
+### 2. **Tests de robustesse**
+- Simulation de pertes de communication UART pour vérifier la stabilité.
