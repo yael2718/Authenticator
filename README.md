@@ -19,8 +19,16 @@ Make upload MAC=1
 Nous avons décidé d'utiliser la branche static de la librairie micro-ecc car elle répondait à nos besoin et qu'elle permettait de faire plus de pré calcul à la compilatio, et donc de réduire le temps de calcul à l'exécution.
 
 ### eeprom
+typedef struct {
+    uint8_t app_id[SHA1_SIZE];
+    uint8_t credential_id[CREDENTIAL_ID_SIZE];
+    uint8_t private_key[PRIVATE_KEY_SIZE];
+} Credential;
+On stocke un utilisateur dans l'eeprom grâce à la structure Credential, qui comporte 3 champs : 
+- **app_id** : l'app id sur 20 octets (taille d'un hash de sha1).
+- **credential_id** : le credential id sur 17 octets.
+- **private_key** : la clé privée sur 21 octets.
 
-## ring_buffer
 
 ## Difficultés rencontrées
 
@@ -33,8 +41,11 @@ On a réalisé plusieurs essais, et c'était en mettant le prescaler à 128 (ADP
 ### BaudRate
 En utilisant la même méthode qu'au TP précèdent pour set le baudRate, on avait des bugs car il était trop élevé. Nous avons donc utilisé la librairie util/setbaud.h .
 
-## APP_ID
+### APP_ID
 Le client envoie toujours la même app_id, donc on ne peut pas teset plusieurs applications à la fois.//A redire
+
+### ring_buffer
+Nous avons commencé par utiliser la librairie ring_buffer pour communiquer en uart. Mais nous n'arrivions pas à la fiare marcher, puis finalement nous nous sommes rendus compte qu'il n'y en avait pas besoin car l'utilisateur n'envoie pas beaucoup de commandes dans un intervalle court.
 
 ## Tests réalisés
 
