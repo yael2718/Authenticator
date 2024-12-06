@@ -5,6 +5,7 @@
 L'**Authenticator** est un système embarqué conçu pour gérer des credentials sécurisés via une interface UART et un stockage en EEPROM. Il permet à
 l’utilisateur de s’authentifier auprès d’un ensemble de services (appelés Relying Parties) à travers
 un Client (souvent un navigateur web).
+Sa logique suit le standard CTAP2 (Client To Authenticator Protocol).
 
 ---
 
@@ -111,4 +112,5 @@ Au départ, nous avons tenté d’utiliser la bibliothèque `ring_buffer` fourni
 - **Commande Reset** : Test de la réinitialisation complète de l'EEPROM.
 
 ### 2. **Tests de robustesse**
-- Simulation de pertes de communication UART pour vérifier la stabilité.
+- Simulation de pertes de communication UART pour vérifier la stabilité (en debranchant le périphérique au milieu d'une requête).
+- La mémoire non volatile ne se réinitialise pas après avoir débranché l'appareil.
