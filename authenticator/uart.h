@@ -11,6 +11,10 @@
 #include <string.h>
 #include <stdlib.h>
 
+uint16_t read_adc();
+int random_seed();
+int avr_rng(uint8_t *dest, unsigned size);
+
 void config(void);
 void UART_init(void);
 uint8_t UART_getc(void);
@@ -27,8 +31,5 @@ void gen_new_keys(uint8_t *app_id);
 void sign_data(uint8_t *app_id, uint8_t* client_data);
 void send_pattern(const char* pattern, uint8_t length);
 void store_in_eeprom(uint8_t *app_id, uint8_t *credential_id, uint8_t *private_key, uint8_t *public_key);
-
-uint16_t read_adc();
-int init_seed();
 
 #endif

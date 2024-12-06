@@ -3,415 +3,448 @@
 #define LED_PIN PD6
 #define BUTTON_PIN PD2
 
-#define FOSC 1843200 // Clock Speed
-#define F_CPU 16000000UL
+#define F_CPU 16000000UL // Microcontroller frequency
 #define BAUD 115200 // Baud rate
 #define USE_2X 1
 
-// MakeCredentialError messages
+// Command identifiers
 #define COMMAND_LIST_CREDENTIALS 0
 #define COMMAND_MAKE_CREDENTIAL 1
 #define COMMAND_GET_ASSERTION 2
 #define COMMAND_RESET 3
+
+
 #define STATUS_OK 0
 #define STATUS_ERR_COMMAND_UNKNOWN 1
 #define STATUS_ERR_CRYPTO_FAILED 2
 #define STATUS_ERR_BAD_PARAMETER 3
 #define STATUS_ERR_NOT_FOUND 4
 #define STATUS_ERR_STORAGE_FULL 5
-#define STATUS_ERR_APROVAL 6
+#define STATUS_ERR_APPROVAL 6
 
 #define SHA1_SIZE 20 // 20 bytes for the application ID
 #define PRIVATE_KEY_SIZE 21 // secp160r1 requires 21 bytes for the private key
 #define PUBLIC_KEY_SIZE 40 // secp160r1 requires 40 bytes for the public key
 #define CREDENTIAL_ID_SIZE 16 // 128 bits for the credential ID
-#define EEPROM_MAX_ENTRIES 17 // 1024 bytes / 57 ~ 17 (partie entière)
+#define EEPROM_MAX_ENTRIES 17 // Maximum entries that fit in 1024 bytes ~ 1024/(SHA1_SIZE+PRIVATE_KEY_SIZE+CREDENTIAL_ID_SIZE)
 
-volatile uint8_t state_button = 1;         // État du bouton (1 = relâché, 0 = appuyé)
-volatile uint8_t count_button = 0;     // Compteur pour détecter la stabilité de l'état
-volatile uint8_t pressed_button = 0;  
+volatile uint8_t state_button = 1;    // Button state (1 = released, 0 = pressed)
+volatile uint8_t count_button = 0;    // Counter for debounce stability
+volatile uint8_t pressed_button = 0;  // Flag for a confirmed button press  
 
+/**
+ * @brief Structure representing a data entry for the authenticator.
+ * 
+ * This structure is used to store information associated with:
+ * - an application identifier (`app_id`),
+ * - a credential identifier (`credential_id`),
+ * - and a private key (`private_key`).
+ * 
+ * It is saved in EEPROM memory for persistent storage.
+ * 
+ * Fields:
+ * - app_id: SHA-1 hash associated with the application (20 bytes).
+ * - credential_id: Unique identifier generated for the key pair (16 bytes).
+ * - private_key: Private key used for signing data (21 bytes for secp160r1).
+ */
 typedef struct {
     uint8_t app_id[SHA1_SIZE];
     uint8_t credential_id[CREDENTIAL_ID_SIZE];
     uint8_t private_key[PRIVATE_KEY_SIZE];
 } Credential;
 
-Credential EEMEM eeprom_data[EEPROM_MAX_ENTRIES] ; // Stockage des données dans l'EEPROM
-uint8_t EEMEM nb_credentials = 0 ; // Nombre d'entrées dans l'EEPROM
+Credential EEMEM eeprom_data[EEPROM_MAX_ENTRIES] ; // Persistent storage in EEPROM
+uint8_t EEMEM nb_credentials = 0 ; // Number of credentials in EEPROM
+
+//--------------------------------- Setup ---------------------------------
 
 /**
- * @brief Configure le générateur pseudo-aléatoire, initialise les broches de la LED et du bouton, et configure l'UART.
+ * @brief Configures the RNG, initializes pins for LED and button, and sets up UART.
  * 
- * @param Aucun.
- * @return Aucun.
+ * @param None.
+ * @return None.
  */
-void config(void){
-
-    // Initialisation de la seed pour le générateur pseudo-aléatoire
-    srand(init_seed());
+void config(void) {
+    // Initialize seed for the pseudo-random number generator
+    srand(random_seed());
     uECC_set_rng(avr_rng);
 
-    // Initialisation des broches
-    DDRD |= (1 << LED_PIN);    // Configurer PD4 comme sortie pour la led
-    DDRD &= ~(1 << BUTTON_PIN);   // Configurer PD2 comme entrée pour le bouton
-    PORTD |= (1 << BUTTON_PIN);   // Activer la résistance pull-up interne pour le bouton
+    // Initialize GPIO pins
+    DDRD |= (1 << LED_PIN);    // Configure PD6 as output for the LED
+    DDRD &= ~(1 << BUTTON_PIN);   // Configure PD2 as input for the button
+    PORTD |= (1 << BUTTON_PIN);   // Enable the internal pull-up resistor for the button
 
-    // Initialisation de l'UART
+    // Initialize UART
     UART_init();
 }
 
-//--------------------------------- Random ---------------------------------
-uint16_t read_adc() {
-    // Configuration de l'ADC :
-    ADMUX = (1 << REFS0);  // Référence AVcc.
-    ADCSRA = (1 << ADEN) | (1 << ADSC) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
-    //(1<<ADEN) pour activer l'ADC. (1<<ADSC) pour activer la conversion. (1<<ADPS0:2) set le division factor à 128 pour avoir une fréquence de 125kHz.
 
-    // Attendre la fin de la conversion : le bit ADSC est set à 0 à la fin de la conversion.
+//--------------------------------- Random ---------------------------------
+
+/**
+ * @brief Reads an analog value using the ADC (Analog-to-Digital Converter).
+ * 
+ * @param None.
+ * @return uint16_t : The result of the ADC conversion.
+ */
+uint16_t read_adc() {
+    // Configure ADC
+    ADMUX = (1 << REFS0);  // Use AVcc as the reference voltage
+    ADCSRA = (1 << ADEN) | (1 << ADSC) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+    // (1 << ADEN) enables the ADC. (1 << ADSC) starts the conversion.
+    // (1 << ADPS0:2) sets the prescaler to 128 for a 125 kHz ADC clock.
+
+    // Wait for the conversion to complete (ADSC is cleared upon completion)
     while (ADCSRA & (1 << ADSC));
 
-    return ADC;
+    return ADC; // Return the ADC result
 }
 
 /**
- * @brief Initialise le générateur pseudo-aléatoire avec une graine obtenue à partir de l'ADC.
+ * @brief Generates a random seed based on ADC readings.
  * 
- * @param Aucun.
- * @return int : La graine générée.
+ * @param None.
+ * @return int : The generated seed value.
  */
-int init_seed() {
+int random_seed() {
     uint32_t seed = 0;
     for (int i = 0; i < 4; i++) {
-        seed ^= (read_adc() & 0xFF) << (i<<3);  // Combine les 8 bits significatifs
+        seed ^= (read_adc() & 0xFF) << (i << 3); // Combine the 8 significant bits
     }
     return seed;
 }
 
 /**
- * @brief Génère un nombre pseudo-aléatoire pour un nombre spécifié d'octets.
+ * @brief Generates pseudo-random bytes and stores them in the specified buffer.
  * 
- * @param dest Pointeur où les octets aléatoires seront stockés.
- * @param size Nombre d'octets à générer.
- * @return int : 1 pour le succès.
+ * @param dest Pointer to the buffer where random bytes will be stored.
+ * @param size Number of bytes to generate.
+ * @return int : Always returns 1 (success).
  */
 int avr_rng(uint8_t *dest, unsigned size) {
     for (unsigned i = 0; i < size; i++) {
-        dest[i] = (uint8_t)(rand() & 0xFF); // Générer un octet pseudo-aléatoire
+        dest[i] = (uint8_t)(rand() & 0xFF); // Generate a pseudo-random byte
     }
-    return 1; // Succès
+    return 1; // Success
 }
 
 // --------------------------------- Button methods ---------------------------------
 
-int ask_for_approval(void) {
-    for(int i = 0; i < 10; i++){
-        PORTD ^= (1 << LED_PIN);     //  allumer la led pendant 0.5 seconde
-        for(int j = 0; j < 33 ; j++){   //  j va jusqu'à 33 car 500/15 = 33
-            debounce();
-            if(pressed_button){
-                pressed_button = 0;
-                PORTD ^= (1 << LED_PIN);    //  eteindre la led
-                return 1;                   //  confirmation obtenue
-            }
-            _delay_ms(15);
-        }
-        PORTD ^= (1 << LED_PIN);     //  eteindre la led pendant 0.5 seconde
-        for(int j = 0; j < 33 ; j++){
-            debounce();
-            if(pressed_button){
-                pressed_button = 0;   //  
-                return 1;            //  confirmation obtenue
-            }
-            _delay_ms(15);
-        }
-    }
-    return 0; 
-}
-
+/**
+ * @brief Debounces a button to ensure stable state transitions.
+ * 
+ * @param None.
+ * @return None.
+ */
 void debounce(void) {
-    uint8_t current_state = PIND & (1 << BUTTON_PIN); // Lire l'état actuel du bouton (PD2)
+    uint8_t current_state = PIND & (1 << BUTTON_PIN); // Read the current button state (PD2)
 
-    if (current_state != state_button) {       // Si l'état a changé
-        count_button++;                             // Incrémenter le compteur
-        if (count_button >= 4) {                    // Si l'état est stable pendant 4 cycles
-            state_button = current_state;      // Mettre à jour l'état du bouton
-            if (state_button == 0) {           // Si le bouton est stable à l'état bas
-                pressed_button = 1;             // Signaler un appui validé
+    if (current_state != state_button) { // If the state has changed
+        count_button++;                  // Increment the counter
+        if (count_button >= 4) {         // If stable for 4 cycles
+            state_button = current_state; // Update the button state
+            if (state_button == 0) {      // If the button is confirmed pressed
+                pressed_button = 1;       // Flag the press
             }
-            count_button = 0;                       // Réinitialiser le compteur
+            count_button = 0;            // Reset the counter
         }
     } else {
-        count_button = 0;                           // Si l'état est constant, réinitialiser
+        count_button = 0; // Reset the counter if the state is constant
     }
+}
+
+/**
+ * @brief Waits for user approval through a button press within 10 seconds.
+ *        Flashes the LED while waiting for input.
+ * 
+ * @param None.
+ * @return int : 1 if the button is pressed, 0 otherwise.
+ */
+int ask_for_approval(void) {
+    for (int i = 0; i < 10; i++) {
+        PORTD ^= (1 << LED_PIN); // Turn the LED on for 0.5 seconds
+        for (int j = 0; j < 33; j++) { // 500 ms / 15 ms = ~33 iterations
+            debounce();
+            if (pressed_button) {
+                pressed_button = 0;
+                PORTD ^= (1 << LED_PIN); // Turn off the LED
+                return 1; // Approval obtained
+            }
+            _delay_ms(15);
+        }
+        PORTD ^= (1 << LED_PIN); // Turn the LED off for 0.5 seconds
+        for (int j = 0; j < 33; j++) {
+            debounce();
+            if (pressed_button) {
+                pressed_button = 0;
+                return 1; // Approval obtained
+            }
+            _delay_ms(15);
+        }
+    }
+    return 0; // Timeout without approval
 }
 
 // --------------------------------- UART methods ---------------------------------
 
 /**
- * @brief Initialise l'UART avec les paramètres spécifiés dans les macros BAUD et F_CPU.
+ * @brief Initializes the UART with the specified parameters (BAUD, F_CPU).
  * 
- * @param Aucun.
- * @return Aucun.
+ * @param None.
+ * @return None.
  */
 void UART_init() {
-    // Calcul de UBRR
-    #include <util/setbaud.h>
+    #include <util/setbaud.h> // Include setbaud.h for UBRR calculation macros
 
-    UBRR0H = UBRRH_VALUE;
-    UBRR0L = UBRRL_VALUE;
+    UBRR0H = UBRRH_VALUE; // Set the high byte of the baud rate
+    UBRR0L = UBRRL_VALUE; // Set the low byte of the baud rate
     #if USE_2X
-    UCSR0A |= (1 << U2X0); // Double vitesse
+    UCSR0A |= (1 << U2X0); // Enable double-speed mode
     #else
-    UCSR0A &= ~(1 << U2X0); // Mode normal
+    UCSR0A &= ~(1 << U2X0); // Use normal speed mode
     #endif
 
-    UCSR0B = (1 << RXEN0) | (1 << TXEN0);   // Activation de la réception et de la transmission
-    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00); // Format de trame : 8 bits de données, 1 bit de stop
+    UCSR0B = (1 << RXEN0) | (1 << TXEN0);   // Enable UART receiver and transmitter
+    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00); // Configure 8 data bits, 1 stop bit
 }
 
 /**
- * @brief Envoie un octet via l'UART.
+ * @brief Sends a single byte of data over UART.
  * 
- * @param data L'octet à envoyer.
- * @return Aucun.
+ * @param data The byte to be transmitted.
+ * @return None.
  */
 void UART_putc(uint8_t data) {
-    // Boucle jusqu'à ce que le registre UDR0 soit prêt pour une nouvelle donnée
     while (!(UCSR0A & (1 << UDRE0))) {
-        // Attente active (polling)
+        // Wait until the data register is ready for transmission
     }
-    // Envoie de la donnée
-    UDR0 = data;
+    UDR0 = data; // Send the byte
 }
 
 /**
- * @brief Envoie une séquence de données (motif) via l'UART.
+ * @brief Sends a sequence of bytes (a pattern) over UART.
  * 
- * @param pattern Pointeur vers les données à envoyer.
- * @param length Nombre d'octets à envoyer.
- * @return Aucun.
+ * @param pattern Pointer to the data sequence to send.
+ * @param length Number of bytes to send.
+ * @return None.
  */
 void send_pattern(const char* pattern, uint8_t length) {
     for (uint8_t i = 0; i < length; i++) {
-		UART_putc(pattern[i]);
+        UART_putc(pattern[i]);
     }
 }
 
 /**
- * @brief Reçoit un octet via l'UART.
+ * @brief Receives a single byte of data from UART.
  * 
- * @param Aucun.
- * @return uint8_t - L'octet reçu.
+ * @param None.
+ * @return uint8_t - The received byte.
  */
-uint8_t UART_getc(void){
-    uint8_t data;
-    while (!(UCSR0A & (1 << RXC0)));    // Attente jusqu'à réception d'un caractère
-    data = UDR0;
-    return data;                     // Retourne le caractère reçu
+uint8_t UART_getc(void) {
+    while (!(UCSR0A & (1 << RXC0))) {
+        // Wait until data is available
+    }
+    return UDR0; // Return the received byte
 }
 
 /**
- * @brief Traite une commande reçue via l'UART.
+ * @brief Handles commands received via UART by executing the appropriate action.
  * 
- * @param data Commande reçue (un octet).
- * @return Aucun.
+ * @param data The received command byte.
+ * @return None.
  */
-void UART_handle_command(uint8_t data){
-
-	if (data == COMMAND_MAKE_CREDENTIAL){ // Message MakeCredential
-        UART_handle_make_credential();
-	} else if (data == COMMAND_GET_ASSERTION) { // Message GetAssertion
-        UART_handle_get_assertion();
-	} else if (data == COMMAND_LIST_CREDENTIALS){ // Message ListCredentials
-        UART_handle_list_credentials();
-    } else if (data == COMMAND_RESET){ // Message Reset
-        UART_handle_reset();
-    } else {
-        // Si la commande est inconnue, envoyer une erreur
-        UART_putc(STATUS_ERR_COMMAND_UNKNOWN);
-	}
+void UART_handle_command(uint8_t data) {
+    switch (data) {
+        case COMMAND_MAKE_CREDENTIAL:
+            UART_handle_make_credential();
+            break;
+        case COMMAND_GET_ASSERTION:
+            UART_handle_get_assertion();
+            break;
+        case COMMAND_LIST_CREDENTIALS:
+            UART_handle_list_credentials();
+            break;
+        case COMMAND_RESET:
+            UART_handle_reset();
+            break;
+        default:
+            UART_putc(STATUS_ERR_COMMAND_UNKNOWN); // Send error for unknown command
+    }
 }
 
 // --------------------------------- MakeCredential ---------------------------------
 
 /**
- * @brief Stocke les informations dans l'EEPROM, incluant app_id, credential_id, private_key, et public_key.
+ * @brief Stores the given key and credential information in EEPROM.
  * 
- * @param app_id Pointeur vers l'empreinte de l'application (SHA1).
- * @param credential_id Pointeur vers le credential_id (16 octets).
- * @param private_key Pointeur vers la clé privée.
- * @param public_key Pointeur vers la clé publique.
- * @return Aucun.
+ * @param app_id Pointer to the application ID (20-byte SHA1 hash).
+ * @param credential_id Pointer to the credential ID (16 bytes).
+ * @param private_key Pointer to the private key (21 bytes).
+ * @param public_key Pointer to the public key (40 bytes).
+ * @return None.
  */
 void store_in_eeprom(uint8_t *app_id, uint8_t *credential_id, uint8_t *private_key, uint8_t *public_key) {
     Credential current_entry;
-    int i = 0;
     uint8_t nb = eeprom_read_byte(&nb_credentials);
     uint8_t app_id_found = 0;
 
+    // Check if the EEPROM is full
     if (nb == EEPROM_MAX_ENTRIES) {
-        // Si l'EEPROM est pleine, envoyer une erreur
-        UART_putc(STATUS_ERR_STORAGE_FULL);
+        UART_putc(STATUS_ERR_STORAGE_FULL); // EEPROM is full
         return;
     }
 
-    while (i < nb){
+    // Stops when finding an empty entry or the app_id
+    for (uint8_t i = 0; i < nb; i++) {
         eeprom_read_block(&current_entry, &eeprom_data[i], sizeof(Credential));
-        // Si l'entrée correspond à app_id ou est vide
         if (memcmp(current_entry.app_id, app_id, SHA1_SIZE) == 0) {
-            app_id_found = 1;
+            app_id_found = 1; // App ID already exists
             break;
         }
-        i++;
     }
 
-    eeprom_read_block(&current_entry, &eeprom_data[i], sizeof(Credential));
-    if (app_id_found == 0){
-        memcpy(current_entry.app_id, app_id, SHA1_SIZE);
-        // Incrémenter le nombre d'entrées
-        eeprom_update_byte(&nb_credentials, eeprom_read_byte(&nb_credentials) + 1);
+    // Store the new entry in EEPROM
+    if (!app_id_found) {
+        memcpy(current_entry.app_id, app_id, SHA1_SIZE); // Store new app ID
+        eeprom_update_byte(&nb_credentials, nb + 1);     // Increment credential count
     }
     memcpy(current_entry.credential_id, credential_id, CREDENTIAL_ID_SIZE);
     memcpy(current_entry.private_key, private_key, PRIVATE_KEY_SIZE);
-    eeprom_update_block(&current_entry, &eeprom_data[i], sizeof(Credential));
+    eeprom_update_block(&current_entry, &eeprom_data[nb], sizeof(Credential));
 
-    // Envoyer un message de confirmation
+    // Send confirmation message
     UART_putc(STATUS_OK);
-    send_pattern((const char*)credential_id, CREDENTIAL_ID_SIZE); // Envoyer credential_id
-    send_pattern((const char*)public_key, PUBLIC_KEY_SIZE);       // Envoyer public_key
+    send_pattern((const char*)credential_id, CREDENTIAL_ID_SIZE);
+    send_pattern((const char*)public_key, PUBLIC_KEY_SIZE);
 }
-
 /**
- * @brief Génère une paire de clés (privée/publique) et un credential_id, puis les stocke dans l'EEPROM.
+ * @brief Generates a new key pair, associates it with an app ID, and stores the data in EEPROM.
  * 
- * @param app_id Pointeur vers l'empreinte de l'application (SHA1).
- * @return Aucun.
+ * @param app_id Pointer to the application ID (20-byte SHA1 hash).
+ * @return None.
  */
-void gen_new_keys(uint8_t *app_id){
-   if (!ask_for_approval()) {
-        // Si l'utilisateur ne valide pas dans les 10 secondes, envoyer une erreur
-        UART_putc(STATUS_ERR_APROVAL);
+void gen_new_keys(uint8_t *app_id) {
+    if (!ask_for_approval()) {
+        UART_putc(STATUS_ERR_APPROVAL); // Approval not granted
         return;
     }
+
     uint8_t private_key[PRIVATE_KEY_SIZE];
     uint8_t public_key[PUBLIC_KEY_SIZE];
     uint8_t credential_id[CREDENTIAL_ID_SIZE];
 
     if (!uECC_make_key(public_key, private_key)) {
-        // Si la génération des clés a échoué, envoyer une erreur
-        UART_putc(STATUS_ERR_CRYPTO_FAILED);
+        UART_putc(STATUS_ERR_CRYPTO_FAILED); // Key generation failed
         return;
     }
 
-    for(int i=0; i<CREDENTIAL_ID_SIZE; i++){
-            credential_id[i] = app_id[i];
+    for (int i = 0; i < CREDENTIAL_ID_SIZE; i++) {
+        credential_id[i] = app_id[i]; // Generate credential ID based on app ID
     }
 
-    // Stocker les clés dans l'EEPROM
     store_in_eeprom(app_id, credential_id, private_key, public_key);
 }
-
 /**
- * @brief Gère la commande MakeCredential pour générer une nouvelle clé.
- *        Lit les données de l'UART et appelle la fonction `gen_new_keys`.
+ * @brief Handles the MakeCredential command by generating a new key pair and storing it.
  * 
- * @param Aucun.
- * @return Aucun.
+ * @param None.
+ * @return None.
  */
-void UART_handle_make_credential(void){
-    uint8_t app_id[SHA1_SIZE]; // Tableau pour stocker l'empreinte
+void UART_handle_make_credential(void) {
+    uint8_t app_id[SHA1_SIZE]; // Buffer to store the application ID
 
     for (int i = 0; i < SHA1_SIZE; i++) {
-        app_id[i] = UART_getc(); // Stocker l'octet dans le tableau
+        app_id[i] = UART_getc(); // Read the application ID from UART
     }
-    // Appeler la fonction pour générer de nouvelles clés avec app_id
-    gen_new_keys(app_id);
+    gen_new_keys(app_id); // Generate and store new keys
 }
 
 // --------------------------------- GetAssertion ---------------------------------
 
 /**
- * @brief Signe les données client_data en utilisant la clé privée correspondant à app_id.
+ * @brief Signs client data using the private key associated with the given app ID.
  * 
- * @param app_id Pointeur vers l'empreinte de l'application (SHA1).
- * @param client_data Pointeur vers les données client à signer (SHA1).
- * @return Aucun.
+ * @param app_id Pointer to the application ID (20-byte SHA1 hash).
+ * @param client_data Pointer to the client data to sign (20 bytes).
+ * @return None.
  */
-void sign_data(uint8_t *app_id, uint8_t* client_data){
+void sign_data(uint8_t *app_id, uint8_t *client_data) {
     Credential current_entry;
-    int i = 0;
+    uint8_t nb = eeprom_read_byte(&nb_credentials);
 
     if (!ask_for_approval()) {
-        // Si l'utilisateur ne valide pas dans les 10 secondes, envoyer une erreur
-        UART_putc(STATUS_ERR_APROVAL);
+        // If the user does not approve, return an error
+        UART_putc(STATUS_ERR_APPROVAL);
         return;
     }
 
-    while (i < EEPROM_MAX_ENTRIES){
+    for (uint8_t i = 0; i < nb; i++) {
         eeprom_read_block(&current_entry, &eeprom_data[i], sizeof(Credential));
-        // Si l'entrée correspond à app_id
-        if (memcmp(current_entry.app_id, app_id, SHA1_SIZE) == 0){
+
+        // Check if the app ID matches the current entry
+        if (memcmp(current_entry.app_id, app_id, SHA1_SIZE) == 0) {
+
+            // Sign the client data using the private key
             uint8_t signature[40];
-            if (!uECC_sign(current_entry.private_key,
-                    client_data,
-                    signature)){
-                // Si la signature a échoué, envoyer une erreur
-                UART_putc(STATUS_ERR_CRYPTO_FAILED);
+            if (!uECC_sign(current_entry.private_key, client_data, signature)) {
+                UART_putc(STATUS_ERR_CRYPTO_FAILED); // Signing failed
                 return;
             }
-            // Envoyer un message de confirmation
+            
+            // Send the signed data over UART
             UART_putc(STATUS_OK);
-            send_pattern((const char*)current_entry.credential_id, CREDENTIAL_ID_SIZE); // Envoyer credential_id
-            send_pattern((const char*)signature, PUBLIC_KEY_SIZE);       // Envoyer signature
+            send_pattern((const char*)current_entry.credential_id, CREDENTIAL_ID_SIZE);
+            send_pattern((const char*)signature, PUBLIC_KEY_SIZE);
             return;
         }
-        i++;
     }
-    // Si l'entrée n'est pas trouvée, envoyer une erreur
-    UART_putc(STATUS_ERR_NOT_FOUND);
+
+    UART_putc(STATUS_ERR_NOT_FOUND); // App ID not found
 }
 
 /**
- * @brief Gère la commande GetAssertion pour signer des données client.
- *        Lit app_id et client_data via l'UART, puis appelle la fonction `sign_data`.
+ * @brief Handles the GetAssertion command by signing client data with a private key.
  * 
- * @param Aucun.
- * @return Aucun.
+ * @param None.
+ * @return None.
  */
-void UART_handle_get_assertion(void){
-    uint8_t app_id[SHA1_SIZE]; // Tableau pour stocker l'empreinte
-    uint8_t client_data[SHA1_SIZE]; // Tableau pour stocker le hachage
+void UART_handle_get_assertion(void) {
+    uint8_t app_id[SHA1_SIZE];
+    uint8_t client_data[SHA1_SIZE];
 
     for (int i = 0; i < SHA1_SIZE; i++) {
-        app_id[i] = UART_getc(); // Stocker l'octet dans le tableau
+        app_id[i] = UART_getc(); // Read application ID from UART
     }
     for (int i = 0; i < SHA1_SIZE; i++) {
-        client_data[i] = UART_getc(); // Stocker l'octet dans le tableau
+        client_data[i] = UART_getc(); // Read client data from UART
     }
 
-    // Appeler la fonction pour signer les données
     sign_data(app_id, client_data);
 }
+
 
 // --------------------------------- ListCredentials ---------------------------------
 
 /**
- * @brief Liste les credentials stockés dans l'EEPROM, incluant app_id et credential_id.
- *        Envoie les informations via l'UART.
+ * @brief Lists the credentials stored in EEPROM, including `app_id` and `credential_id`.
+ *        Sends the credentials information over UART.
  * 
- * @param Aucun.
- * @return Aucun.
+ * @param None.
+ * @return None.
  */
-void UART_handle_list_credentials(void){
-    UART_putc(STATUS_OK);
-    UART_putc(eeprom_read_byte(&nb_credentials));
-    uint8_t i = 0;
+void UART_handle_list_credentials(void) {
     Credential current_entry;
-    while (i < nb_credentials){
+    uint8_t nb = eeprom_read_byte(&nb_credentials);
+    uint8_t i = 0;
+
+    UART_putc(STATUS_OK); // Indicate success
+    UART_putc(nb); // Send the number of stored credentials
+
+    // Iterate through the stored credentials
+    while (i < nb) {
         eeprom_read_block(&current_entry, &eeprom_data[i], sizeof(Credential));
-        send_pattern((const char*)current_entry.credential_id, CREDENTIAL_ID_SIZE); // Envoyer credential_id
-        send_pattern((const char*)current_entry.app_id, SHA1_SIZE); // Envoyer app_id
+        send_pattern((const char*)current_entry.credential_id, CREDENTIAL_ID_SIZE); // Send credential_id
+        send_pattern((const char*)current_entry.app_id, SHA1_SIZE); // Send app_id
         i++;
     }
 }
@@ -419,43 +452,48 @@ void UART_handle_list_credentials(void){
 // --------------------------------- Reset ---------------------------------
 
 /**
- * @brief Réinitialise l'EEPROM en supprimant tous les credentials et réinitialise le compteur nb_credentials.
+ * @brief Resets the EEPROM by clearing all stored credentials and resetting the counter (`nb_credentials`).
+ *        Requires user approval before executing the reset.
  * 
- * @param Aucun.
- * @return Aucun.
+ * @param None.
+ * @return None.
  */
 void UART_handle_reset(void) {
     if (!ask_for_approval()) {
-        UART_putc(STATUS_ERR_APROVAL);
+        UART_putc(STATUS_ERR_APPROVAL); // Approval not granted
         return;
     }
-    uint8_t nb = eeprom_read_byte(&nb_credentials);
-    Credential empty_entry = {0};
 
-    // Réinitialiser chaque entrée
+    uint8_t nb = eeprom_read_byte(&nb_credentials); // Read the current number of credentials
+    Credential empty_entry = {0}; // Define an empty credential structure
+
+    // Overwrite each stored entry with the empty structure
     for (uint8_t i = 0; i < nb; i++) {
         eeprom_write_block(&empty_entry, &eeprom_data[i], sizeof(Credential));
     }
 
-    // Réinitialiser le compteur
+    // Reset the counter
     eeprom_write_byte(&nb_credentials, 0);
 
-    UART_putc(STATUS_OK);
+    UART_putc(STATUS_OK); // Indicate success
 }
+
 
 // --------------------------------- Main ---------------------------------
 
 /**
- * @brief Fonction principale qui configure les périphériques et exécute une boucle infinie pour traiter les commandes.
+ * @brief Main function that configures peripherals and executes an infinite loop 
+ *        to handle commands received via UART.
  * 
- * @param Aucun.
- * @return int : Code de sortie (0 si tout se passe bien).
+ * @param None.
+ * @return int : Returns 0 if the program executes without errors.
  */
-int main(void){
-    config();
-    while(1){
-        uint8_t command = UART_getc();
-        UART_handle_command(command);
+int main(void) {
+    config(); // Initialize peripherals and configuration
+
+    while (1) {
+        uint8_t command = UART_getc(); // Wait for a command via UART
+        UART_handle_command(command); // Process the received command
     }
-	return 0;
+    return 0;
 }
