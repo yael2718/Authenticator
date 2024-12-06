@@ -1,7 +1,7 @@
 #include "uart.h"
 
-#define LED_PIN PD4
-#define BUTTON_PIN PD2 
+#define LED_PIN PD6
+#define BUTTON_PIN PD2
 
 #define FOSC 1843200 // Clock Speed
 #define F_CPU 16000000UL
@@ -150,7 +150,6 @@ void UART_handle_command(uint8_t data){
 
 void UART_handle_make_credential(void){
     uint8_t app_id[SHA1_SIZE]; // Tableau pour stocker l'empreinte
-    uint8_t temp;
 
     for (int i = 0; i < 20; i++) {
         app_id[i] = UART_getc(); // Stocker l'octet dans le tableau
@@ -200,8 +199,8 @@ void gen_new_keys(uint8_t *app_id){
         UART_putc(STATUS_ERR_APROVAL);
         return;
     }
-    uint8_t private_key[PRIVATE_KEY_SIZE];
-    uint8_t public_key[PUBLIC_KEY_SIZE];
+    uint8_t private_key[PRIVATE_KEY_SIZE] = {0};
+    uint8_t public_key[PUBLIC_KEY_SIZE] = {0};
     uint8_t credential_id[CREDENTIAL_ID_SIZE];
 
     // Select the curve secp160r1
@@ -262,7 +261,6 @@ void sign_data(uint8_t *app_id, uint8_t* client_data){
 void UART_handle_get_assertion(void){
     uint8_t app_id[SHA1_SIZE]; // Tableau pour stocker l'empreinte
     uint8_t client_data[SHA1_SIZE]; // Tableau pour stocker le hachage
-    uint8_t temp;
 
     for (int i = 0; i < SHA1_SIZE; i++) {
         app_id[i] = UART_getc(); // Stocker l'octet dans le tableau
@@ -292,20 +290,24 @@ void UART_handle_list_credentials(void){
 
 // --------------------------------- Reset ---------------------------------
 
-void UART_handle_reset(void){
+void UART_handle_reset(void) {
     if (!ask_for_approval()) {
-        // Si l'utilisateur ne valide pas dans les 10 secondes, envoyer une erreur
         UART_putc(STATUS_ERR_APROVAL);
         return;
     }
-    int mem_len = eeprom_read_byte(&nb_credentials) * sizeof(Credential);
-    for (int i = 0; i < mem_len; i++){
-        eeprom_write_byte(&((uint8_t*)eeprom_data)[i], 0);
-    }
+
+    size_t eeprom_size = EEPROM_MAX_ENTRIES * sizeof(Credential);
+
+    uint8_t zero_buffer[eeprom_size];
+    memset(zero_buffer, 0, eeprom_size);
+
+    eeprom_write_block(zero_buffer, eeprom_data, eeprom_size);
+
     eeprom_write_byte(&nb_credentials, 0);
-    // Envoyer un message de confirmation
+
     UART_putc(STATUS_OK);
 }
+
 
 
 

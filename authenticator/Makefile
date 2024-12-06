@@ -1,6 +1,6 @@
 # Détection du port selon le système d'exploitation
 ifeq ($(MAC), 1)
-    PORT := /dev/tty.usbmodem2101
+    PORT := /dev/tty.usbmodem101
 else
     PORT := /dev/ttyACM0
 endif
@@ -12,7 +12,7 @@ WARNINGS := -Wall -Wextra -pedantic -Wshadow -Wpointer-arith -Wcast-align \
             -Wstrict-prototypes -Wno-array-bounds
 
 CFLAGS := -Os -DF_CPU=16000000UL -mmcu=atmega328p $(WARNINGS)
-LDFLAGS := -L. -lring_buffer
+
 
 # Chemins des fichiers sources
 SRC := uart.c
@@ -30,7 +30,7 @@ program.hex: program.elf
 
 # Génération du fichier .elf à partir des fichiers objets
 program.elf: $(OBJ)
-	avr-gcc $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	avr-gcc $(CFLAGS) -o $@ $^ 
 	rm -f $(OBJ) # Supprimer les fichiers objets après génération
 
 # Compilation des fichiers sources en fichiers objets
